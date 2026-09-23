@@ -34,7 +34,7 @@
 - [x] 班级、学期、全局切学期、学期汇总
 - [x] 学生列表、新增、修改、离班、恢复
 - [x] 布局预览与提交、座次读取、换座预览与提交、记分、单条撤销、整批撤销、积分时间线
-- [ ] 把名单导入的预览和提交接到 `POST /classes/:id/import/preview` 与 `/commit`，并提供两个 Excel 模板下载
+- [x] 把名单导入的预览和提交接到 `POST /classes/:id/import/preview` 与 `/commit`，并提供两个 Excel 模板下载
 - [ ] 把学生匿名化、班级匿名化接到对应路由；外部账本失败则整次回滚
 - [ ] 把普通标记的定义和打标接到 `/marks` 与 `/students/:id/marks/:mark_id`
 - [ ] 把审计查询和备份记录接到 `/audit` 与 `/backup/records`

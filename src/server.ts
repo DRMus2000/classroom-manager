@@ -1,11 +1,13 @@
 /**
  * HTTP 入口。路由调用已经按设计文档改过的服务。
  * 卫生、回放、点名、倒计时和导出仍没有对应服务，这些路径返回 404。
+ * 名单导入提供模板下载、预览和提交。
  */
 
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
-import { ZodError, type ZodTypeAny } from 'zod';
+import multipart from '@fastify/multipart';
+import { z, ZodError, type ZodTypeAny } from 'zod';
 import { AppError } from './lib/errors.js';
 import { randomUUID } from 'node:crypto';
 import { healthCheck, db } from './repo/db.js';
@@ -18,12 +20,25 @@ import * as studentService from './services/students.js';
 import * as layoutService from './services/layout.js';
 import * as seatService from './services/seats.js';
 import * as pointsService from './services/points.js';
+import * as importService from './services/imports.js';
+import {
+  MAX_IMPORT_BYTES,
+  XLSX_MIME,
+  assertXlsxUpload,
+  buildImportTemplate,
+  contentDisposition,
+  detectImportKind,
+  importFileError,
+  isUploadTooLarge,
+} from './services/importTemplate.js';
 import {
   activateTermInput,
   applyLayoutChangeInput,
   changePasswordInput,
   createBatchInput,
   createClassInput,
+  importCommitInput,
+  importTemplateQuery,
   createStudentInput,
   createTermInput,
   leaveStudentInput,
@@ -38,6 +53,7 @@ import {
   reverseEntryInput,
   seatAssignmentsInput,
   sseQuery,
+  uuid,
 } from './lib/schema.js';
 
 const SESSION_COOKIE = 'session';
@@ -47,6 +63,10 @@ interface AuthUser {
   teacher_id: string;
   username: string;
   token_version: number;
+}
+
+function routeId(request: FastifyRequest): string {
+  return parse<{ id: string }>(z.object({ id: uuid }), request.params).id;
 }
 
 function parse<T>(schema: ZodTypeAny, value: unknown): T {
@@ -74,6 +94,9 @@ async function currentTermId(): Promise<string> {
 export async function buildServer() {
   const app = Fastify({ logger: true });
   await app.register(cookie);
+  await app.register(multipart, {
+    limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 4, fieldSize: 1024 },
+  });
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
@@ -87,6 +110,16 @@ export async function buildServer() {
           code: 'VALIDATION_FAILED',
           message: '请求参数不正确',
           details: { issues: error.issues },
+          request_id: request.id,
+        },
+      });
+    }
+    if (isUploadTooLarge(error)) {
+      return reply.status(422).send({
+        error: {
+          code: 'IMPORT_INVALID',
+          message: '导入文件校验失败',
+          details: { issues: [{ code: 'FILE_TOO_LARGE', message: '文件超过 2MB' }] },
           request_id: request.id,
         },
       });
@@ -221,6 +254,62 @@ export async function buildServer() {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof restoreStudentInput.parse>>(restoreStudentInput, request.body);
     return studentService.restoreStudent(user.teacher_id, (request.params as { id: string }).id, body);
+  });
+
+  app.get('/api/v1/classes/:id/import/template', async (request, reply) => {
+    await requireUser(request);
+    const classId = routeId(request);
+    const query = parse<ReturnType<typeof importTemplateQuery.parse>>(importTemplateQuery, request.query);
+    const cls = await classRepo.findClass(db, classId);
+    if (!cls) throw new AppError('NOT_FOUND', '班级不存在');
+    const template = await buildImportTemplate(query.kind);
+    return reply
+      .header('Content-Type', XLSX_MIME)
+      .header('Content-Disposition', contentDisposition(template.filename))
+      .header('Content-Length', String(template.body.length))
+      .send(template.body);
+  });
+
+  app.post('/api/v1/classes/:id/import/preview', async (request) => {
+    await requireUser(request);
+    const classId = routeId(request);
+    let file;
+    try {
+      file = await request.file();
+    } catch (err) {
+      if (isUploadTooLarge(err)) throw importFileError('FILE_TOO_LARGE', '文件超过 2MB');
+      throw importFileError('FILE_UNREADABLE', '文件读取失败');
+    }
+    if (!file || file.fieldname !== 'file') {
+      throw importFileError('FILE_REQUIRED', '请上传字段名为 file 的 xlsx 文件');
+    }
+    let buffer: Buffer;
+    try {
+      buffer = await file.toBuffer();
+    } catch (err) {
+      if (isUploadTooLarge(err)) throw importFileError('FILE_TOO_LARGE', '文件超过 2MB');
+      throw importFileError('FILE_UNREADABLE', '文件读取失败');
+    }
+    assertXlsxUpload(file.filename || '', buffer);
+    const kind = await detectImportKind(buffer);
+    return importService.buildPreviewWithChangeSet(classId, kind, buffer);
+  });
+
+  app.post('/api/v1/classes/:id/import/commit', async (request) => {
+    const user = await requireUser(request);
+    const classId = routeId(request);
+    const body = parse<ReturnType<typeof importCommitInput.parse>>(importCommitInput, request.body);
+    const result = await importService.commitImport(
+      user.teacher_id,
+      classId,
+      body.preview_token,
+      body.expected_version,
+      body.request_id,
+    );
+    return {
+      seat_version: result.seat_version,
+      applied: { create: result.created, update: result.updated },
+    };
   });
 
   app.get('/api/v1/layout', async (request) => {

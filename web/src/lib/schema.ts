@@ -498,6 +498,27 @@ export const backupRecordDto = z.object({
 export type BackupRecordDto = z.infer<typeof backupRecordDto>;
 
 /* ------------------------------------------------------------------ */
+/* 导入                                                                */
+/* ------------------------------------------------------------------ */
+
+export const importTemplateKind = z.enum(['rows', 'seatmap']);
+export type ImportTemplateKind = z.infer<typeof importTemplateKind>;
+
+export const importTemplateQuery = z.object({
+  kind: importTemplateKind,
+});
+export type ImportTemplateQuery = z.infer<typeof importTemplateQuery>;
+
+export const importCommitResult = z.object({
+  seat_version: z.number().int(),
+  applied: z.object({
+    create: z.number().int(),
+    update: z.number().int(),
+  }),
+});
+export type ImportCommitResult = z.infer<typeof importCommitResult>;
+
+/* ------------------------------------------------------------------ */
 /* 分页                                                                */
 /* ------------------------------------------------------------------ */
 

@@ -19,8 +19,8 @@
     "backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
-    "@fastify/cookie": "^9.4.0",
-    "@fastify/multipart": "^8.3.0",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/multipart": "^9.4.0",
     "@fastify/static": "^7.0.4",
     "argon2": "^0.41.1",
     "drizzle-orm": "^0.36.4",

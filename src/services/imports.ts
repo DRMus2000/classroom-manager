@@ -20,6 +20,7 @@ import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
 import { Errors } from '../lib/errors.js';
 import { withIdempotency } from './idempotency.js';
+import { readCellText } from './importTemplate.js';
 import { createHash } from 'node:crypto';
 import type { ImportIssue, ImportChange, ImportPreviewDto, ImportTemplateKind } from '../lib/schema.js';
 
@@ -82,7 +83,7 @@ export async function parseWorkbook(
   const issues: ImportIssue[] = [];
 
   if (kind === 'rows') {
-    const ws = wb.getWorksheet('名单') ?? wb.worksheets[0];
+    const ws = wb.getWorksheet('名单');
     if (!ws) {
       issues.push({
         severity: 'error',
@@ -100,22 +101,22 @@ export async function parseWorkbook(
     ws.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
 
-      const studentNo = String(row.getCell(1).value ?? '').trim();
-      const name = String(row.getCell(2).value ?? '').trim();
-      const seatRaw = row.getCell(3).value;
-      const remark = String(row.getCell(4).value ?? '').trim();
+      const studentNo = readCellText(row.getCell(1).value);
+      const name = readCellText(row.getCell(2).value);
+      const seatRaw = readCellText(row.getCell(3).value);
+      const remark = readCellText(row.getCell(4).value);
 
-      // 整行为空 → 跳过
-      if (!studentNo && !name && (seatRaw == null || String(seatRaw).trim() === '')) return;
+      // 整行为空 → 跳过。公式没有缓存结果时也视为空，不把公式文本写入学号。
+      if (!studentNo && !name && !seatRaw) return;
 
       let seatNumber: number | null = null;
-      if (seatRaw != null && String(seatRaw).trim() !== '') {
+      if (seatRaw !== '') {
         const n = Number(seatRaw);
         if (!Number.isInteger(n) || n <= 0) {
           issues.push({
             severity: 'error',
             code: 'SEAT_INVALID',
-            message: `座位号「${String(seatRaw)}」不是有效的正整数`,
+            message: `座位号「${seatRaw}」不是有效的正整数`,
             sheet: ws.name,
             cell: `C${rowNumber}`,
             row: rowNumber,
@@ -161,7 +162,7 @@ export async function parseWorkbook(
     });
   } else {
     // 平面座位表：每个机位一个格子，内容形如 "20240101 张三"
-    const ws = wb.getWorksheet('座位表') ?? wb.worksheets[0];
+    const ws = wb.getWorksheet('座位表');
     if (!ws) {
       issues.push({
         severity: 'error',
@@ -177,7 +178,7 @@ export async function parseWorkbook(
 
     ws.eachRow((row, rowNumber) => {
       row.eachCell((cell, colNumber) => {
-        const raw = String(cell.value ?? '').trim();
+        const raw = readCellText(cell.value);
         if (!raw) return;
 
         // 期望格式： "<座位号>号:<学号> <姓名>" 或 "<学号> <姓名>"（座位号从表头解析）

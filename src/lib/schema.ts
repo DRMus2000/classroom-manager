@@ -644,6 +644,11 @@ export type BackupRecordDto = z.infer<typeof backupRecordDto>;
 export const importTemplateKind = z.enum(['rows', 'seatmap']);
 export type ImportTemplateKind = z.infer<typeof importTemplateKind>;
 
+export const importTemplateQuery = z.object({
+  kind: importTemplateKind,
+});
+export type ImportTemplateQuery = z.infer<typeof importTemplateQuery>;
+
 /** 逐条导入问题：必须能定位到工作表 + 单元格或行。 */
 export const importIssue = z.object({
   severity: z.enum(['error', 'warning']),
@@ -696,6 +701,16 @@ export const importCommitInput = z.object({
   request_id: requestId,
 });
 export type ImportCommitInput = z.infer<typeof importCommitInput>;
+
+/** 提交成功体。与 docs/API.md 的导入预览一节一致。 */
+export const importCommitResult = z.object({
+  seat_version: z.number().int(),
+  applied: z.object({
+    create: z.number().int(),
+    update: z.number().int(),
+  }),
+});
+export type ImportCommitResult = z.infer<typeof importCommitResult>;
 
 /* ------------------------------------------------------------------ */
 /* 分页                                                                */
