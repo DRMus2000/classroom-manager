@@ -20,6 +20,7 @@ import * as studentService from './services/students.js';
 import * as layoutService from './services/layout.js';
 import * as seatService from './services/seats.js';
 import * as pointsService from './services/points.js';
+import * as markService from './services/marks.js';
 import * as importService from './services/imports.js';
 import {
   MAX_IMPORT_BYTES,
@@ -45,8 +46,11 @@ import {
   createTermInput,
   leaveStudentInput,
   listEntriesQuery,
+  createMarkInput,
   loginInput,
+  markAssignInput,
   patchClassInput,
+  patchMarkInput,
   patchStudentInput,
   planSeatsInput,
   previewLayoutChangeInput,
@@ -184,6 +188,47 @@ export async function buildServer() {
       username: user.username,
       token_version: user.token_version,
     };
+  });
+
+  app.get('/api/v1/marks', async (request) => {
+    await requireUser(request);
+    return markService.listMarks();
+  });
+
+  app.post('/api/v1/marks', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof createMarkInput.parse>>(createMarkInput, request.body);
+    return markService.createMark(user.teacher_id, body);
+  });
+
+  app.patch('/api/v1/marks/:id', async (request) => {
+    const user = await requireUser(request);
+    const markId = routeId(request);
+    const body = parse<ReturnType<typeof patchMarkInput.parse>>(patchMarkInput, request.body);
+    const { request_id, ...patch } = body;
+    return markService.patchMark(user.teacher_id, markId, patch, request_id);
+  });
+
+  app.post('/api/v1/students/:id/marks/:mark_id', async (request) => {
+    const user = await requireUser(request);
+    const params = parse<{ id: string; mark_id: string }>(
+      z.object({ id: uuid, mark_id: uuid }),
+      request.params,
+    );
+    const body = parse<ReturnType<typeof markAssignInput.parse>>(markAssignInput, request.body);
+    await markService.addMark(user.teacher_id, params.id, params.mark_id, body.request_id);
+    return { ok: true };
+  });
+
+  app.delete('/api/v1/students/:id/marks/:mark_id', async (request) => {
+    const user = await requireUser(request);
+    const params = parse<{ id: string; mark_id: string }>(
+      z.object({ id: uuid, mark_id: uuid }),
+      request.params,
+    );
+    const body = parse<ReturnType<typeof markAssignInput.parse>>(markAssignInput, request.body);
+    await markService.removeMark(user.teacher_id, params.id, params.mark_id, body.request_id);
+    return { ok: true };
   });
 
   app.get('/api/v1/classes', async (request) => {

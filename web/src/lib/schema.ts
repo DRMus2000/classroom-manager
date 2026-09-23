@@ -498,6 +498,45 @@ export const backupRecordDto = z.object({
 export type BackupRecordDto = z.infer<typeof backupRecordDto>;
 
 /* ------------------------------------------------------------------ */
+/* 普通标记                                                            */
+/* ------------------------------------------------------------------ */
+
+export const markColor = z.string().regex(/^#[0-9A-Fa-f]{6}$/);
+
+export const markDefDto = z.object({
+  mark_id: uuid,
+  name: z.string(),
+  icon: z.string(),
+  color: markColor,
+  sort_order: z.number().int(),
+});
+export type MarkDefDto = z.infer<typeof markDefDto>;
+
+export const createMarkInput = z.object({
+  name: z.string().trim().min(1).max(64),
+  icon: z.string().trim().min(1).max(32),
+  color: markColor,
+  sort_order: z.number().int().min(0).max(10_000).optional(),
+  request_id: requestId,
+});
+export type CreateMarkInput = z.infer<typeof createMarkInput>;
+
+export const patchMarkInput = z.object({
+  name: z.string().trim().min(1).max(64).optional(),
+  icon: z.string().trim().min(1).max(32).optional(),
+  color: markColor.optional(),
+  sort_order: z.number().int().min(0).max(10_000).optional(),
+  archived: z.boolean().optional(),
+  request_id: requestId,
+});
+export type PatchMarkInput = z.infer<typeof patchMarkInput>;
+
+export const markAssignInput = z.object({
+  request_id: requestId,
+});
+export type MarkAssignInput = z.infer<typeof markAssignInput>;
+
+/* ------------------------------------------------------------------ */
 /* 导入                                                                */
 /* ------------------------------------------------------------------ */
 

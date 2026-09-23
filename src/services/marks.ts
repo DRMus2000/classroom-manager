@@ -12,6 +12,7 @@ import { idempotentTx } from './idempotency.js';
 import * as studentRepo from '../repo/student.js';
 import * as auditRepo from '../repo/audit.js';
 import { Errors } from '../lib/errors.js';
+import type { CreateMarkInput, PatchMarkInput } from '../lib/schema.js';
 
 export interface MarkDefDto {
   mark_id: string;
@@ -34,16 +35,24 @@ export async function listMarks(db: Db = defaultDb): Promise<MarkDefDto[]> {
 
 export async function createMark(
   actorId: string,
-  input: { name: string; icon: string; color: string; sort_order?: number; request_id: string },
+  input: CreateMarkInput,
   db: Db = defaultDb,
 ): Promise<MarkDefDto> {
   return idempotentTx(db, input.request_id, 'POST /api/v1/marks', input, async (tx) => {
-    const created = await studentRepo.createMarkDef(tx, {
-      name: input.name,
-      icon: input.icon,
-      color: input.color,
-      sort_order: input.sort_order,
-    });
+    let created: studentRepo.MarkDefRow;
+    try {
+      created = await studentRepo.createMarkDef(tx, {
+        name: input.name,
+        icon: input.icon,
+        color: input.color,
+        sort_order: input.sort_order,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw Errors.forbidden('已有同名的未归档标记');
+      }
+      throw err;
+    }
 
     await auditRepo.writeAudit(tx, {
       actor: actorId,
@@ -68,13 +77,7 @@ export async function createMark(
 export async function patchMark(
   actorId: string,
   markId: string,
-  patch: {
-    name?: string;
-    icon?: string;
-    color?: string;
-    sort_order?: number;
-    archived?: boolean;
-  },
+  patch: Omit<PatchMarkInput, 'request_id'>,
   requestId: string,
   db: Db = defaultDb,
 ): Promise<MarkDefDto> {
@@ -91,8 +94,8 @@ export async function patchMark(
               color = COALESCE(${patch.color ?? null}, color),
               sort_order = COALESCE(${patch.sort_order ?? null}, sort_order),
               archived_at = CASE
-                WHEN ${patch.archived ?? null} IS NULL THEN archived_at
-                WHEN ${patch.archived ?? null} = true THEN now()
+                WHEN ${patch.archived === undefined}::boolean THEN archived_at
+                WHEN ${patch.archived === true}::boolean THEN now()
                 ELSE NULL
               END
           WHERE mark_id = ${markId}
@@ -198,4 +201,15 @@ export async function removeMark(
       },
     });
   });
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  const queue = [err];
+  for (let i = 0; i < queue.length && i < 4; i += 1) {
+    const current = queue[i];
+    if (!current || typeof current !== 'object') continue;
+    if ('code' in current && (current as { code: unknown }).code === '23505') return true;
+    if ('cause' in current) queue.push((current as { cause: unknown }).cause);
+  }
+  return false;
 }
