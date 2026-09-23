@@ -7,6 +7,8 @@
  */
 
 import { sql, type Db, type Tx, now } from './db.js';
+import { afterCommit } from './afterCommit.js';
+import { publishEvent } from '../events/broadcaster.js';
 import { REPLAY_RELEVANT_KINDS, type EventKind } from '../lib/schema.js';
 
 export interface AuditRow {
@@ -71,7 +73,9 @@ export async function writeEvent(
         VALUES (${input.class_id}, ${input.kind}, ${JSON.stringify(input.payload)}, ${replayRelevant})
         RETURNING event_seq, class_id, kind, payload, replay_relevant, occurred_at`,
   );
-  return rows[0]!;
+  const row = rows[0]!;
+  afterCommit(() => publishEvent(row));
+  return row;
 }
 
 /** 查询审计（分页）。 */

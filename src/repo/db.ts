@@ -12,6 +12,7 @@ import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { SQL } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 import { rowsOf } from './queryRows.js';
+import { runWithCommitHooks } from './afterCommit.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -64,8 +65,8 @@ export type Tx = SqlClient;
  * });
  * ```
  */
-export async function withTx<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
-  return db.transaction(fn);
+export async function withTx<T>(database: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return runWithCommitHooks(() => database.transaction(fn));
 }
 
 /**

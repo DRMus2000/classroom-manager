@@ -7,7 +7,9 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import { ZodError, type ZodTypeAny } from 'zod';
 import { AppError } from './lib/errors.js';
+import { randomUUID } from 'node:crypto';
 import { healthCheck, db } from './repo/db.js';
+import { broadcaster } from './events/broadcaster.js';
 import * as classRepo from './repo/class.js';
 import * as auditRepo from './repo/audit.js';
 import * as authService from './services/auth.js';
@@ -320,18 +322,25 @@ export async function buildServer() {
     if (since > 0 && rows.length === 0 && current > since + 1000) {
       raw.write(`event: resync\ndata: ${JSON.stringify({ reason: 'seq_expired' })}\n\n`);
     }
+    let sent = since;
     for (const row of rows) {
+      const seq = Number(row.event_seq);
       raw.write(
-        `id: ${row.event_seq}\ndata: ${JSON.stringify({
-          event_seq: Number(row.event_seq),
+        `id: ${seq}\ndata: ${JSON.stringify({
+          event_seq: seq,
           kind: row.kind,
           class_id: row.class_id,
           payload: row.payload,
           occurred_at: row.occurred_at,
         })}\n\n`,
       );
+      sent = seq;
     }
-    raw.end();
+    const unsubscribe = broadcaster.subscribe(randomUUID(), raw, {
+      classId: query.class_id,
+      lastEventId: sent,
+    });
+    raw.on('close', unsubscribe);
   });
 
   return app;
