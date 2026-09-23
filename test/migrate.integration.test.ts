@@ -84,21 +84,22 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
         { code: '1', display_order: 4, direction: 'toward_back', facing: 'right' },
       ]);
 
-      const slots = await check.query<{ code: string; seats: number; numbered: number }>(
-        `SELECT c.code,
-                count(*)::int AS seats,
-                count(s.seat_number)::int AS numbered
-         FROM room_column c
-         JOIN room_slot s ON s.column_id = c.column_id
-         GROUP BY c.code
-         ORDER BY c.code`,
+      const slots = await check.query<{ code: string; sort_in_column: number; seat_number: number }>(
+        `SELECT c.code, s.sort_in_column, s.seat_number
+         FROM room_slot s
+         JOIN room_column c ON c.column_id = s.column_id`,
       );
-      assert.deepEqual(slots.rows, [
-        { code: '1', seats: 14, numbered: 0 },
-        { code: '2', seats: 14, numbered: 0 },
-        { code: '3', seats: 13, numbered: 0 },
-        { code: '4', seats: 13, numbered: 0 },
-      ]);
+      const numberOf = (code: string, sort: number) =>
+        slots.rows.find((row) => row.code === code && row.sort_in_column === sort)?.seat_number;
+      assert.equal(numberOf('1', 1), 1);
+      assert.equal(numberOf('1', 14), 14);
+      assert.equal(numberOf('2', 14), 15);
+      assert.equal(numberOf('2', 1), 28);
+      assert.equal(numberOf('3', 1), 29);
+      assert.equal(numberOf('3', 13), 41);
+      assert.equal(numberOf('4', 13), 42);
+      assert.equal(numberOf('4', 1), 54);
+      assert.equal(new Set(slots.rows.map((row) => row.seat_number)).size, 54);
 
       const applied = await check.query<{ filename: string }>(
         'SELECT filename FROM schema_migrations ORDER BY filename',

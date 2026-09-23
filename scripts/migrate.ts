@@ -15,6 +15,9 @@ import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, sql, withTx, closeDb } from '../src/repo/db.js';
+import { changedDiff, renumerate, type RoomColumn, type RoomSlot } from '../src/domain/renumber.js';
+import { applySeatNumbers } from '../src/repo/layout.js';
+import type { SeatDirection } from '../src/lib/schema.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
@@ -89,6 +92,61 @@ async function migrateUp(): Promise<void> {
 
   if (count === 0) console.log('没有待执行的迁移。');
   else console.log(`\n共执行 ${count} 个迁移。`);
+
+  await fillSeatNumbers();
+}
+
+/** 迁移不写显示编号。此处用 renumerate() 回填，已正确的编号不会重写。 */
+async function fillSeatNumbers(): Promise<void> {
+  const tables = await db.execute<{ exists: boolean }>(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'room_slot'
+    ) AS exists
+  `);
+  if (!tables[0]?.exists) return;
+
+  const columns = await db.execute<{
+    column_id: string;
+    code: string;
+    display_order: number;
+    direction: SeatDirection;
+  }>(sql`
+    SELECT column_id, code, display_order, direction::text AS direction
+    FROM room_column
+  `);
+  const slots = await db.execute<{
+    seat_id: string;
+    column_id: string;
+    sort_in_column: number;
+    seat_number: number | null;
+  }>(sql`
+    SELECT seat_id, column_id, sort_in_column, seat_number
+    FROM room_slot
+  `);
+
+  const roomColumns: RoomColumn[] = columns.map((column) => ({
+    column_id: column.column_id,
+    code: column.code,
+    display_order: column.display_order,
+    direction: column.direction,
+  }));
+  const roomSlots: RoomSlot[] = slots.map((slot) => ({
+    seat_id: slot.seat_id,
+    column_id: slot.column_id,
+    sort_in_column: slot.sort_in_column,
+    seat_number: slot.seat_number,
+  }));
+  const diff = renumerate(roomColumns, roomSlots);
+  if (changedDiff(diff).length === 0) {
+    console.log('座位编号已与 renumerate() 一致。');
+    return;
+  }
+
+  await withTx(db, async (tx) => {
+    await applySeatNumbers(tx, diff);
+  });
+  console.log(`已按 renumerate() 回填 ${diff.length} 个座位编号。`);
 }
 
 async function migrateStatus(): Promise<void> {
