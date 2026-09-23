@@ -8,11 +8,11 @@
  * - 匿名化只清空身份信息，历史数值与事件全部保留；匿名化清单独立保存。
  */
 
-import { withTx, type Db, db as defaultDb, sql } from '../repo/db.js';
+import { type Db, type Tx, db as defaultDb, sql } from '../repo/db.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
-import { completeIdempotent, idempotentTx, runReservedIdempotent } from './idempotency.js';
+import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import type {
   StudentDto,
@@ -21,7 +21,13 @@ import type {
   LeaveStudentInput,
   RestoreStudentInput,
 } from '../lib/schema.js';
-import { appendAnonLedgerEntry } from './anonLedger.js';
+import { appendAnonLedgerEntries, type NewAnonLedgerEntry } from './anonLedger.js';
+
+function isoTimestamp(value: Date | string | null | undefined): string | null {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 
 function toDto(
   s: studentRepo.StudentRow,
@@ -32,14 +38,14 @@ function toDto(
     student_id: s.student_id,
     class_id: s.class_id,
     student_no: s.student_no,
-    name: s.name || s.anon_code || '',
+    name: s.name,
     remark: s.remark,
     status: s.status,
     left_reason: s.left_reason,
     left_note: s.left_note,
-    left_at: s.left_at?.toISOString() ?? null,
+    left_at: isoTimestamp(s.left_at),
     anon_code: s.anon_code,
-    anon_at: s.anon_at?.toISOString() ?? null,
+    anon_at: isoTimestamp(s.anon_at),
     seat: seat
       ? {
           seat_id: seat.seat_id,
@@ -347,142 +353,159 @@ export async function restoreStudent(
   });
 }
 
+interface PreparedAnon {
+  student: StudentDto;
+  anonId: string;
+  ledger: NewAnonLedgerEntry;
+}
+
 /**
  * 匿名化：去除姓名、学号和身份备注，历史数值及事件保留。
- *
- * 关键：匿名化清单必须写入独立于数据库备份的 append-only 账本，
- * 否则恢复旧备份后无法补做后续匿名化（第 12 项）。
+ * 外部账本写入失败时抛错，数据库事务整体回滚。
  */
 export async function anonymizeStudent(
   actorId: string,
   studentId: string,
   requestId: string,
   db: Db = defaultDb,
-  options: { idempotent?: boolean } = {},
 ): Promise<{ student: StudentDto; ledger_entry_id: string }> {
-  return withTx(db, async (tx) => {
-    const run = async (): Promise<{ student: StudentDto; ledger_entry_id: string }> => {
-    const student = await studentRepo.findStudent(tx, studentId);
-    if (!student) throw Errors.notFound('学生', studentId);
-    if (student.status === 'anonymized') {
-      throw Errors.forbidden('该学生已匿名化');
-    }
-
-    const anonCode = student.anon_code ?? (await studentRepo.nextAnonCode(tx, student.class_id));
-
-    // 下一个处理版本号（追加递增，不覆盖历史）
-    const verRows = await tx.execute<{ max: number | null }>(
-      sql`SELECT MAX(process_version)::int AS max FROM anon_registry WHERE student_id = ${studentId}`,
-    );
-    const processVersion = (verRows[0]?.max ?? 0) + 1;
-
-    const updated = await studentRepo.anonymizeStudent(tx, studentId, anonCode);
-    if (!updated) throw Errors.notFound('学生', studentId);
-
-    // 登记匿名化记录（不含原始姓名 / 学号）
-    const reg = await tx.execute<{ anon_id: string }>(
-      sql`INSERT INTO anon_registry (student_id, class_id, anon_code, process_version)
-          VALUES (${studentId}, ${student.class_id}, ${anonCode}, ${processVersion})
-          RETURNING anon_id`,
-    );
-    const anonId = reg[0]!.anon_id;
-
-    await tx.execute(
-      sql`INSERT INTO anon_ledger_export (anon_id, state) VALUES (${anonId}, 'pending')
-          ON CONFLICT (anon_id) DO NOTHING`,
-    );
-
-    // 写入外部 append-only 账本（失败则记录状态，由重试流程处理）
-    let ledgerEntryId = '';
-    try {
-      ledgerEntryId = await appendAnonLedgerEntry({
-        student_id: studentId,
-        class_id: student.class_id,
-        anon_code: anonCode,
-        processed_at: new Date().toISOString(),
-        process_version: processVersion,
-      });
-
-      await tx.execute(
-        sql`UPDATE anon_ledger_export
-            SET state = 'exported', attempts = attempts + 1, exported_at = now(),
-                ledger_entry_id = ${ledgerEntryId}
-            WHERE anon_id = ${anonId}`,
-      );
-    } catch (err) {
-      // 导出失败必须留痕并可重试（第 12 项）
-      await tx.execute(
-        sql`UPDATE anon_ledger_export
-            SET state = 'failed', attempts = attempts + 1, last_error = ${String(err)}
-            WHERE anon_id = ${anonId}`,
-      );
-    }
-
-    await auditRepo.writeAudit(tx, {
-      actor: actorId,
-      entity: 'student',
-      entity_id: studentId,
-      action: 'anonymized',
-      // 审计里也不留存原始姓名
-      before: { status: student.status },
-      after: { status: 'anonymized', anon_code: anonCode, process_version: processVersion },
-      request_id: requestId,
-    });
-
-    await auditRepo.writeEvent(tx, {
-      class_id: student.class_id,
-      kind: 'roster_changed',
-      payload: {
-        class_id: student.class_id,
-        action: 'student_anonymized',
-        student_id: studentId,
-        anon_code: anonCode,
-      },
-    });
-
-    const seat = await studentRepo.findStudentSeat(tx, student.class_id, studentId);
-    return { student: toDto(updated, seat), ledger_entry_id: ledgerEntryId };
-    };
-    if (options.idempotent === false) return run();
-    return completeIdempotent(
-      tx,
-      requestId,
-      `POST /api/v1/students/${studentId}/anonymize`,
-      { request_id: requestId },
-      run,
-    );
-  });
+  return idempotentTx(
+    db,
+    requestId,
+    `POST /api/v1/students/${studentId}/anonymize`,
+    { request_id: requestId },
+    async (tx) => {
+      const prepared = await prepareAnonymize(tx, actorId, studentId, requestId);
+      const [ledgerEntryId] = await exportAnonLedger(tx, [prepared]);
+      if (!ledgerEntryId) throw Errors.internal('外部匿名账本写入失败，本次匿名化已回滚');
+      return { student: prepared.student, ledger_entry_id: ledgerEntryId };
+    },
+  );
 }
 
-/** 班级批量匿名化入口。每人一笔事务，整次请求单独占一个幂等键。 */
+/** 班级批量匿名化。逐人一条账本；任何一条写失败则整班回滚。 */
 export async function anonymizeClass(
   actorId: string,
   classId: string,
   requestId: string,
   db: Db = defaultDb,
 ): Promise<{ anonymized: number; failed: number; students: string[] }> {
-  return runReservedIdempotent(
+  return idempotentTx(
     db,
     requestId,
     `POST /api/v1/classes/${classId}/anonymize`,
     { request_id: requestId },
-    async () => {
-      const students = await studentRepo.listStudents(db, classId, { status: 'all' });
-      const targets = students.filter((s) => s.status !== 'anonymized');
+    async (tx) => {
+      const cls = await classRepo.findClass(tx, classId);
+      if (!cls) throw Errors.notFound('班级', classId);
 
-      const done: string[] = [];
-      let failed = 0;
-
-      for (const s of targets) {
-        try {
-          await anonymizeStudent(actorId, s.student_id, requestId, db, { idempotent: false });
-          done.push(s.student_id);
-        } catch {
-          failed++;
-        }
+      const students = await studentRepo.listStudents(tx, classId, { status: 'all' });
+      const prepared: PreparedAnon[] = [];
+      for (const student of students) {
+        if (student.status === 'anonymized') continue;
+        prepared.push(await prepareAnonymize(tx, actorId, student.student_id, requestId));
       }
-
-      return { anonymized: done.length, failed, students: done };
+      await exportAnonLedger(tx, prepared);
+      return {
+        anonymized: prepared.length,
+        failed: 0,
+        students: prepared.map((item) => item.student.student_id),
+      };
     },
   );
+}
+
+async function prepareAnonymize(
+  tx: Tx,
+  actorId: string,
+  studentId: string,
+  requestId: string,
+): Promise<PreparedAnon> {
+  const student = await studentRepo.findStudent(tx, studentId);
+  if (!student) throw Errors.notFound('学生', studentId);
+  if (student.status === 'anonymized') {
+    throw Errors.forbidden('该学生已匿名化');
+  }
+
+  const anonCode = student.anon_code ?? (await studentRepo.nextAnonCode(tx, student.class_id));
+  const verRows = await tx.execute<{ max: number | null }>(
+    sql`SELECT MAX(process_version)::int AS max FROM anon_registry WHERE student_id = ${studentId}`,
+  );
+  const processVersion = (verRows[0]?.max ?? 0) + 1;
+
+  const updated = await studentRepo.anonymizeStudent(tx, studentId, anonCode);
+  if (!updated) throw Errors.notFound('学生', studentId);
+
+  const reg = await tx.execute<{ anon_id: string }>(
+    sql`INSERT INTO anon_registry (student_id, class_id, anon_code, process_version)
+        VALUES (${studentId}, ${student.class_id}, ${anonCode}, ${processVersion})
+        RETURNING anon_id`,
+  );
+  const anonId = reg[0]?.anon_id;
+  if (!anonId) throw Errors.internal('匿名化登记失败');
+
+  await tx.execute(
+    sql`INSERT INTO anon_ledger_export (anon_id, state) VALUES (${anonId}, 'pending')
+        ON CONFLICT (anon_id) DO NOTHING`,
+  );
+
+  await auditRepo.writeAudit(tx, {
+    actor: actorId,
+    entity: 'student',
+    entity_id: studentId,
+    action: 'anonymized',
+    before: { status: student.status },
+    after: { status: 'anonymized', anon_code: anonCode, process_version: processVersion },
+    request_id: requestId,
+  });
+
+  await auditRepo.writeEvent(tx, {
+    class_id: student.class_id,
+    kind: 'roster_changed',
+    payload: {
+      class_id: student.class_id,
+      action: 'student_anonymized',
+      student_id: studentId,
+      anon_code: anonCode,
+    },
+  });
+
+  const seat = await studentRepo.findStudentSeat(tx, student.class_id, studentId);
+  return {
+    student: toDto(updated, seat),
+    anonId,
+    ledger: {
+      student_id: studentId,
+      class_id: student.class_id,
+      anon_code: anonCode,
+      processed_at: new Date().toISOString(),
+      process_version: processVersion,
+    },
+  };
+}
+
+async function exportAnonLedger(tx: Tx, prepared: PreparedAnon[]): Promise<string[]> {
+  if (prepared.length === 0) return [];
+  let entryIds: string[];
+  try {
+    entryIds = await appendAnonLedgerEntries(prepared.map((item) => item.ledger));
+  } catch {
+    throw Errors.internal('外部匿名账本写入失败，本次匿名化已回滚');
+  }
+  if (entryIds.length !== prepared.length || entryIds.some((id) => !id)) {
+    throw Errors.internal('外部匿名账本写入失败，本次匿名化已回滚');
+  }
+  for (let i = 0; i < prepared.length; i += 1) {
+    const anonId = prepared[i]!.anonId;
+    const entryId = entryIds[i]!;
+    await tx.execute(
+      sql`UPDATE anon_registry SET ledger_entry_id = ${entryId} WHERE anon_id = ${anonId}`,
+    );
+    await tx.execute(
+      sql`UPDATE anon_ledger_export
+          SET state = 'exported', attempts = attempts + 1, exported_at = now(), updated_at = now()
+          WHERE anon_id = ${anonId}`,
+    );
+  }
+  return entryIds;
 }

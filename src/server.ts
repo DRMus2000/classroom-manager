@@ -37,6 +37,8 @@ import {
   changePasswordInput,
   createBatchInput,
   createClassInput,
+  anonymizeClassInput,
+  anonymizeStudentInput,
   importCommitInput,
   importTemplateQuery,
   createStudentInput,
@@ -254,6 +256,20 @@ export async function buildServer() {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof restoreStudentInput.parse>>(restoreStudentInput, request.body);
     return studentService.restoreStudent(user.teacher_id, (request.params as { id: string }).id, body);
+  });
+
+  app.post('/api/v1/students/:id/anonymize', async (request) => {
+    const user = await requireUser(request);
+    const studentId = routeId(request);
+    const body = parse<ReturnType<typeof anonymizeStudentInput.parse>>(anonymizeStudentInput, request.body);
+    return studentService.anonymizeStudent(user.teacher_id, studentId, body.request_id);
+  });
+
+  app.post('/api/v1/classes/:id/anonymize', async (request) => {
+    const user = await requireUser(request);
+    const classId = routeId(request);
+    const body = parse<ReturnType<typeof anonymizeClassInput.parse>>(anonymizeClassInput, request.body);
+    return studentService.anonymizeClass(user.teacher_id, classId, body.request_id);
   });
 
   app.get('/api/v1/classes/:id/import/template', async (request, reply) => {

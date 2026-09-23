@@ -15,7 +15,7 @@
  * 挂载在独立卷上，与 backups 卷分开，绝不随数据库恢复被覆盖。
  */
 
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { encryptAnonLedger, decryptAnonLedger } from '../lib/crypto.js';
@@ -71,39 +71,78 @@ export async function readLedger(): Promise<AnonLedgerEntry[]> {
     .map((l) => JSON.parse(l) as AnonLedgerEntry);
 }
 
+export type NewAnonLedgerEntry = Omit<AnonLedgerEntry, 'entry_id'>;
+
 /** 追加一条匿名化记录，返回账本条目 id。 */
-export async function appendAnonLedgerEntry(input: {
-  student_id: string;
-  class_id: string;
-  anon_code: string;
-  processed_at: string;
-  process_version: number;
-}): Promise<string> {
-  const entryId = randomUUID();
+export async function appendAnonLedgerEntry(input: NewAnonLedgerEntry): Promise<string> {
+  const [entryId] = await appendAnonLedgerEntries([input]);
+  if (!entryId) throw new Error('匿名账本没有写入');
+  return entryId;
+}
 
-  const entry: AnonLedgerEntry = {
-    entry_id: entryId,
-    student_id: input.student_id,
-    class_id: input.class_id,
-    anon_code: input.anon_code,
-    processed_at: input.processed_at,
-    process_version: input.process_version,
-  };
+/**
+ * 一次追加多条。同一学生、同一处理版本已存在时复用原条目，不重复追加。
+ * 写入用临时文件再 rename；失败时删掉临时文件，不改已有账本。
+ */
+export async function appendAnonLedgerEntries(inputs: NewAnonLedgerEntry[]): Promise<string[]> {
+  if (inputs.length === 0) return [];
+  for (const input of inputs) validateLedgerInput(input);
 
+  const key = ledgerKey();
   const existing = await readLedger();
-  const merged = [...existing, entry];
-  const plaintext = merged.map((e) => JSON.stringify(e)).join('\n') + '\n';
-  const ciphertext = encryptAnonLedger(plaintext, ledgerKey());
+  const ids: string[] = [];
+  const appended: AnonLedgerEntry[] = [];
+  for (const input of inputs) {
+    const prev =
+      existing.find(
+        (entry) =>
+          entry.student_id === input.student_id && entry.process_version === input.process_version,
+      ) ??
+      appended.find(
+        (entry) =>
+          entry.student_id === input.student_id && entry.process_version === input.process_version,
+      );
+    if (prev) {
+      ids.push(prev.entry_id);
+      continue;
+    }
+    const entry: AnonLedgerEntry = { entry_id: randomUUID(), ...input };
+    appended.push(entry);
+    ids.push(entry.entry_id);
+  }
+  if (appended.length === 0) return ids;
+  await writeEncrypted([...existing, ...appended], key);
+  return ids;
+}
 
+function validateLedgerInput(input: NewAnonLedgerEntry): void {
+  if (!input.student_id || !input.class_id || !input.anon_code) {
+    throw new Error('匿名账本条目缺少必要字段');
+  }
+  if (input.student_id.length > 64 || input.class_id.length > 64 || input.anon_code.length > 64) {
+    throw new Error('匿名账本字段过长');
+  }
+  if (!Number.isInteger(input.process_version) || input.process_version < 1) {
+    throw new Error('匿名账本处理版本不合法');
+  }
+  if (Number.isNaN(Date.parse(input.processed_at))) {
+    throw new Error('匿名账本时间不合法');
+  }
+}
+
+async function writeEncrypted(entries: AnonLedgerEntry[], key: string): Promise<void> {
+  const plaintext = entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n';
+  const ciphertext = encryptAnonLedger(plaintext, key);
   const path = ledgerPath();
   await mkdir(dirname(path), { recursive: true });
-
-  // 原子写入：临时文件 → rename，避免进程中断产生半截文件
-  const tmp = join(dirname(path), `.ledger.${Date.now()}.tmp`);
-  await writeFile(tmp, ciphertext, 'utf8');
-  await rename(tmp, path);
-
-  return entryId;
+  const tmp = join(dirname(path), `.ledger.${process.pid}.${Date.now()}.tmp`);
+  try {
+    await writeFile(tmp, ciphertext, { encoding: 'utf8', flag: 'wx' });
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**
