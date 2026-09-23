@@ -7,7 +7,7 @@
 - [x] Node 22 + TypeScript + Fastify 后端工程，以及 React 18 + Vite 前端工程骨架
 - [x] Docker Compose（nginx、api、postgres）、Nginx、`.env.example`、`.gitignore`
 - [x] 固定 Drizzle 与 `db.execute` 的返回类型，使 `npm run typecheck` 能通过
-- [ ] 在 PostgreSQL 16 上执行 `001`、`002`，确认迁移可重复执行且种子列方向与 `docs/SCHEMA.md` 一致
+- [x] 在 PostgreSQL 16 上执行 `001`、`002`，确认迁移可重复执行且种子列方向与 `docs/SCHEMA.md` 一致
 - [ ] 迁移之后调用符合规范的 `renumerate()`，把初始 54 座回填为 1–54
 
 ## 2. 数据模型与迁移
