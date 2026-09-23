@@ -287,7 +287,8 @@ CREATE INDEX IF NOT EXISTS idx_entry_batch       ON point_entry (batch_id);
 CREATE INDEX IF NOT EXISTS idx_entry_class_seq   ON point_entry (class_id_snapshot, seq);
 
 -- 余额缓存：与账本同事务维护。
--- last_change_seq 用于并列破序：口径 = 最近一次积分变化的时间序。
+-- last_change_seq 存的是该批次的回放事件序号 event_log.event_seq，
+-- 不是 point_entry.seq。同一批次的学生共用这个序号来破并列。
 CREATE TABLE IF NOT EXISTS point_balance (
   term_id         uuid NOT NULL REFERENCES term    ON DELETE RESTRICT,
   student_id      uuid NOT NULL REFERENCES student ON DELETE RESTRICT,
