@@ -101,6 +101,82 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
       assert.equal(numberOf('4', 1), 54);
       assert.equal(new Set(slots.rows.map((row) => row.seat_number)).size, 54);
 
+      const indexes = await check.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND indexname = ANY($1::text[])
+         ORDER BY indexname`,
+        [[
+          'uq_term_current',
+          'uq_term_single_open',
+          'uq_student_no_active',
+          'uq_room_slot_number',
+          'uq_seat_assign_student',
+          'uq_entry_reversed_once',
+          'uq_entry_reversed_by_once',
+          'uq_round_single_open',
+          'uq_selection_single_open',
+          'uq_candidate_consumed',
+          'idx_balance_rank',
+        ]],
+      );
+      assert.deepEqual(
+        indexes.rows.map((row) => row.indexname),
+        [
+          'idx_balance_rank',
+          'uq_candidate_consumed',
+          'uq_entry_reversed_by_once',
+          'uq_entry_reversed_once',
+          'uq_room_slot_number',
+          'uq_round_single_open',
+          'uq_seat_assign_student',
+          'uq_selection_single_open',
+          'uq_student_no_active',
+          'uq_term_current',
+          'uq_term_single_open',
+        ],
+      );
+
+      const triggers = await check.query<{ tgname: string }>(
+        `SELECT tgname FROM pg_trigger
+         WHERE NOT tgisinternal AND tgname = ANY($1::text[])
+         ORDER BY tgname`,
+        [[
+          'trg_batch_term_open',
+          'trg_entry_term_open',
+          'trg_four_columns',
+          'trg_no_polarity_flip',
+        ]],
+      );
+      assert.deepEqual(
+        triggers.rows.map((row) => row.tgname),
+        ['trg_batch_term_open', 'trg_entry_term_open', 'trg_four_columns', 'trg_no_polarity_flip'],
+      );
+
+      const foreignKeys = await check.query<{ conname: string }>(
+        `SELECT conname FROM pg_constraint
+         WHERE contype = 'f' AND conname = ANY($1::text[])
+         ORDER BY conname`,
+        [['fk_candidate_selection', 'fk_obligation_round']],
+      );
+      assert.deepEqual(
+        foreignKeys.rows.map((row) => row.conname),
+        ['fk_candidate_selection', 'fk_obligation_round'],
+      );
+
+      const seatForeignKeys = await check.query<{ referenced: string }>(
+        `SELECT r.relname AS referenced
+         FROM pg_constraint fk
+         JOIN pg_class c ON c.oid = fk.conrelid
+         JOIN pg_class r ON r.oid = fk.confrelid
+         WHERE fk.contype = 'f' AND c.relname = 'seat_assignment'
+         ORDER BY r.relname`,
+      );
+      assert.deepEqual(
+        seatForeignKeys.rows.map((row) => row.referenced),
+        ['class', 'room_slot', 'student', 'term'],
+      );
+
       const applied = await check.query<{ filename: string }>(
         'SELECT filename FROM schema_migrations ORDER BY filename',
       );

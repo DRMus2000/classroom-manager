@@ -8,13 +8,13 @@
 - [x] Docker Compose（nginx、api、postgres）、Nginx、`.env.example`、`.gitignore`
 - [x] 固定 Drizzle 与 `db.execute` 的返回类型，使 `npm run typecheck` 能通过
 - [x] 在 PostgreSQL 16 上执行 `001`、`002`，确认迁移可重复执行且种子列方向与 `docs/SCHEMA.md` 一致
-- [ ] 迁移之后调用符合规范的 `renumerate()`，把初始 54 座回填为 1–54
+- [x] 迁移之后调用符合规范的 `renumerate()`，把初始 54 座回填为 1–54
 
 ## 2. 数据模型与迁移
 
 - [x] 第一阶段表：账号、班级学期、机位、座次、积分账本、审计、幂等、事件、备份、匿名登记
 - [x] 第二阶段表：普通标记、卫生轮次、冻结候选、抽选；含 `frozen_at`、`version` 和未确认抽选唯一索引
-- [ ] 对照 `docs/SCHEMA.md` 核对主外键、部分唯一索引和三支触发器（四列上限、禁止反转模板方向、旧学期禁写账本）
+- [x] 对照 `docs/SCHEMA.md` 核对主外键、部分唯一索引和三支触发器（四列上限、禁止反转模板方向、旧学期禁写账本）
 - [ ] 给 `point_balance.last_change_seq` 补一条说明：它存的是批次回放事件序号，不是逐条明细序号
 
 ## 3. 核心中间件
