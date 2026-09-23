@@ -4,16 +4,16 @@
  * 约定（A5/A6/A7）：
  * - 一次批量 → 一个批次，整体成功或整体失败，共享同一 occurred_at。
  * - 撤销生成反向记录，原记录永不改写；部分撤销后仍可整批撤销剩余（Q2 方案 a）。
- * - 幂等：同 request_id 重试返回原结果，不重复执行。
+ * - 幂等：同 request_id 同请求体重放原结果；请求体不同则 409，不重复记账。
  * - 旧学期只读：非当前学期一律拒绝写入（DB 触发器兜底）。
  */
 
-import { withTx, type Db, db as defaultDb, sql } from '../repo/db.js';
+import { type Db, db as defaultDb } from '../repo/db.js';
 import * as pointsRepo from '../repo/points.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
-import { withIdempotency } from './idempotency.js';
+import { idempotentTx } from './idempotency.js';
 import { canReverseBatch, canReverseEntry, validateDeltaPolarity } from '../domain/points.js';
 import { Errors } from '../lib/errors.js';
 import type {
@@ -34,13 +34,12 @@ export async function createBatch(
   input: CreateBatchInput,
   db: Db = defaultDb,
 ): Promise<BatchResultDto> {
-  return withTx(db, async (tx) => {
-    const result = await withIdempotency(
-      tx,
-      input.request_id,
-      'POST /points/batches',
-      input,
-      async () => {
+  return idempotentTx(
+    db,
+    input.request_id,
+    'POST /api/v1/points/batches',
+    input,
+    async (tx) => {
         // 1. 校验学期为当前且 open
         const term = await classRepo.findTerm(tx, input.term_id);
         if (!term) throw Errors.notFound('学期', input.term_id);
@@ -196,12 +195,9 @@ export async function createBatch(
           undo: { batch_reverse_available: true, already_reversed_count: 0 },
         };
 
-        return { statusCode: 200, body: dto };
-      },
-    );
-
-    return result.body;
-  });
+        return dto;
+  },
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -218,13 +214,12 @@ export async function reverseBatch(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<BatchResultDto> {
-  return withTx(db, async (tx) => {
-    const result = await withIdempotency(
-      tx,
-      requestId,
-      `POST /points/batches/${batchId}/reverse`,
-      { batchId },
-      async () => {
+  return idempotentTx(
+    db,
+    requestId,
+    `POST /api/v1/points/batches/${batchId}/reverse`,
+    { request_id: requestId },
+    async (tx) => {
         const found = await pointsRepo.findBatchWithEntries(tx, batchId);
         if (!found) throw Errors.notFound('积分批次', batchId);
 
@@ -369,12 +364,9 @@ export async function reverseBatch(
           undo: { batch_reverse_available: false, already_reversed_count: 0 },
         };
 
-        return { statusCode: 200, body: dto };
-      },
-    );
-
-    return result.body;
-  });
+        return dto;
+  },
+  );
 }
 
 /** 单条撤销。已撤销明细 → 409。 */
@@ -384,13 +376,12 @@ export async function reverseEntry(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<BatchResultDto> {
-  return withTx(db, async (tx) => {
-    const result = await withIdempotency(
-      tx,
-      requestId,
-      `POST /points/entries/${entryId}/reverse`,
-      { entryId },
-      async () => {
+  return idempotentTx(
+    db,
+    requestId,
+    `POST /api/v1/points/entries/${entryId}/reverse`,
+    { request_id: requestId },
+    async (tx) => {
         const entry = await pointsRepo.findEntry(tx, entryId);
         if (!entry) throw Errors.notFound('积分明细', entryId);
 
@@ -515,12 +506,9 @@ export async function reverseEntry(
           undo: { batch_reverse_available: false, already_reversed_count: 0 },
         };
 
-        return { statusCode: 200, body: dto };
-      },
-    );
-
-    return result.body;
-  });
+        return dto;
+  },
+  );
 }
 
 /* ------------------------------------------------------------------ */

@@ -8,7 +8,8 @@
  * - 影响预览 + 审计记录。
  */
 
-import { withTx, type Db, db as defaultDb } from '../repo/db.js';
+import { type Db, db as defaultDb } from '../repo/db.js';
+import { idempotentTx } from './idempotency.js';
 import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
 import { renumerate, changedDiff, type RoomColumn, type RoomSlot } from '../domain/renumber.js';
@@ -201,7 +202,12 @@ export async function applyLayoutChange(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<{ renumber_diff: { seat_id: string; old: number | null; new: number }[]; total_slots: number }> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(
+    db,
+    requestId,
+    'POST /api/v1/layout/apply-change',
+    { kind, payload, preview_hash: previewHash, request_id: requestId },
+    async (tx) => {
     // 1. 重新预览，校验 preview_hash 仍有效（防止预览后布局被改动）
     const fresh = await previewLayoutChange(kind, payload, tx);
     if (fresh.preview_hash !== previewHash) {

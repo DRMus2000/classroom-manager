@@ -24,7 +24,7 @@
 - [x] 乐观锁 `expected_version`（座次、新增、离班、恢复）和切学期的 `expected_current_term_id`
 - [x] SSE 事件种类，含 `rollcall_changed`；断线用 `Last-Event-ID` 从 `event_log` 补发
 - [x] 写事务提交成功后再广播 SSE，避免事务回滚后客户端已收到事件
-- [ ] 写接口统一走幂等包装：同键同体返回原响应，同键不同体返回 409
+- [x] 写接口统一走幂等包装：同键同体返回原响应，同键不同体返回 409
 
 ## 4. 各模块 API
 

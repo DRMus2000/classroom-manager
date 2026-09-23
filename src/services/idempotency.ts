@@ -1,16 +1,17 @@
 /**
- * 幂等执行服务：防止同一 request_id 重复执行。
+ * 写接口的幂等包装。
  *
- * 约定（A7）：
- * - 同键首次调用：写入 state='in_flight'，执行逻辑，成功后更新 state='done' + 存响应体。
- * - 同键重试：命中 state='done' → 返回原响应；命中 state='in_flight' → 409 REQUEST_IN_FLIGHT。
- * - 同键不同体（request_hash 不匹配）→ 409 IDEMPOTENCY_MISMATCH。
- * - 失败后幂等记录保留（state='in_flight'），允许重试（应用层需要自己清理或设 TTL）。
+ * 同键同体：返回首次的状态码和响应体，业务函数不会再执行。
+ * 同键不同体，或同一个 request_id 打到了另一个端点：409 IDEMPOTENCY_MISMATCH。
+ * 已占用且尚未完成：409 REQUEST_IN_FLIGHT。
+ *
+ * 单次业务事务用 idempotentTx：占位和业务一起提交，失败则整笔回滚，重试可以重新执行。
+ * 必须拆成多次提交的写操作用 runReservedIdempotent：先提交占位，失败后删除占位。
  */
 
-import { sql, type Db, type Tx, now, uuid as genUuid } from '../repo/db.js';
-import { Errors } from '../lib/errors.js';
-import { createHash } from 'node:crypto';
+import { sql, type Db, type Tx, now, withTx } from '../repo/db.js';
+import { executeReserved, runIdempotent, type IdempotencyStore } from './idempotencyRun.js';
+import type { StoredIdempotency } from '../domain/idempotency.js';
 
 export interface IdempotencyRecord {
   request_id: string;
@@ -23,101 +24,158 @@ export interface IdempotencyRecord {
   completed_at: Date | null;
 }
 
-/**
- * 幂等执行器：包裹业务逻辑，自动处理幂等校验 + 响应缓存。
- *
- * @param db 数据库连接（需在事务内）
- * @param requestId 幂等键（UUID v4）
- * @param endpoint 端点标识（如 'POST /points/batches'）
- * @param requestBody 请求体（用于计算 hash）
- * @param fn 业务逻辑（返回 { statusCode, body }）
- * @returns 原始响应或缓存的响应
- */
 export async function withIdempotency<T>(
-  db: Tx,
+  tx: Tx,
   requestId: string,
   endpoint: string,
   requestBody: unknown,
   fn: () => Promise<{ statusCode: number; body: T }>,
 ): Promise<{ statusCode: number; body: T; fromCache: boolean }> {
-  const requestHash = hashRequest(requestBody);
-
-  // 1. 查询幂等记录
-  const existing = await findIdempotencyRecord(db, requestId);
-
-  if (existing) {
-    // 同键不同体 → 拒绝
-    if (existing.request_hash !== requestHash) {
-      throw Errors.idempotencyMismatch('同一 request_id 但请求体不一致');
-    }
-
-    // 已完成 → 返回缓存
-    if (existing.state === 'done') {
-      return {
-        statusCode: existing.status_code!,
-        body: existing.response_body as T,
-        fromCache: true,
-      };
-    }
-
-    // 处理中 → 告知前端稍候
-    if (existing.state === 'in_flight') {
-      throw Errors.requestInFlight('请求正在处理中，请稍候');
-    }
-  }
-
-  // 2. 首次调用：写入 in_flight
-  await db.execute(
-    sql`INSERT INTO idempotency (request_id, endpoint, request_hash, state, created_at)
-        VALUES (${requestId}, ${endpoint}, ${requestHash}, 'in_flight', ${now()})
-        ON CONFLICT (request_id) DO NOTHING`,
-  );
-
-  // 3. 执行业务逻辑
-  const result = await fn();
-
-  // 4. 成功后更新为 done + 存响应
-  await db.execute(
-    sql`UPDATE idempotency
-        SET state = 'done',
-            status_code = ${result.statusCode},
-            response_body = ${JSON.stringify(result.body)},
-            completed_at = ${now()}
-        WHERE request_id = ${requestId}`,
-  );
-
-  return { ...result, fromCache: false };
+  return runIdempotent(pgStore(tx), requestId, endpoint, requestBody, fn);
 }
 
-/** 查询幂等记录（by request_id）。 */
-async function findIdempotencyRecord(
-  db: Db | Tx,
+export async function completeIdempotent<T>(
+  tx: Tx,
   requestId: string,
-): Promise<IdempotencyRecord | null> {
-  const rows = await db.execute<IdempotencyRecord>(
-    sql`SELECT request_id, endpoint, request_hash, status_code, response_body, state, created_at, completed_at
-        FROM idempotency WHERE request_id = ${requestId}`,
-  );
-  return rows[0] ?? null;
+  endpoint: string,
+  requestBody: unknown,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const result = await withIdempotency(tx, requestId, endpoint, requestBody, async () => ({
+    statusCode: 200,
+    body: await fn(),
+  }));
+  return result.body;
 }
 
-/** 计算请求体哈希（SHA-256）。 */
-function hashRequest(body: unknown): string {
-  const json = JSON.stringify(body);
-  return createHash('sha256').update(json, 'utf8').digest('hex');
+/** 在一个事务里完成占位、业务和响应缓存。 */
+export async function idempotentTx<T>(
+  db: Db,
+  requestId: string,
+  endpoint: string,
+  requestBody: unknown,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return withTx(db, (tx) => completeIdempotent(tx, requestId, endpoint, requestBody, () => fn(tx)));
+}
+
+/** 占位单独提交。适合一次请求里包含多笔已经各自提交的写入。 */
+export async function runReservedIdempotent<T>(
+  db: Db,
+  requestId: string,
+  endpoint: string,
+  requestBody: unknown,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return executeReserved(autoCommitStore(db), requestId, endpoint, requestBody, fn);
 }
 
 /**
  * 清理过期幂等记录（维护命令用）。
- * 保留最近 7 天的记录，删除更早的 state='done' 记录。
- * state='in_flight' 的记录视为未完成请求，不自动删除（需人工介入排查）。
+ * 保留最近若干天的已完成记录。未完成的占位不自动删除。
  */
 export async function cleanupExpiredIdempotency(db: Db | Tx, retentionDays = 7): Promise<number> {
+  if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
+    throw new Error('retentionDays 必须是 1 到 3650 的整数');
+  }
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-  const result = await db.execute<{ count: number }>(
+  const result = await db.execute<{ request_id: string }>(
     sql`DELETE FROM idempotency
         WHERE state = 'done' AND created_at < ${cutoff}
         RETURNING request_id`,
   );
   return result.length;
 }
+
+function pgStore(tx: Tx): IdempotencyStore {
+  return {
+    async find(requestId) {
+      const rows = await tx.execute<{
+        request_id: string;
+        endpoint: string;
+        request_hash: string;
+        status_code: number | string | null;
+        response_body: unknown;
+        state: string;
+      }>(
+        sql`SELECT request_id, endpoint, request_hash, status_code, response_body, state
+            FROM idempotency WHERE request_id = ${requestId}`,
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        request_id: row.request_id,
+        endpoint: row.endpoint,
+        request_hash: row.request_hash,
+        status_code: coerceStatus(row.status_code),
+        response_body: decodeBody(row.response_body),
+        state: row.state === 'in_flight' || row.state === 'done' ? row.state : 'unknown',
+      };
+    },
+    async insertInFlight(row) {
+      const inserted = await tx.execute<{ request_id: string }>(
+        sql`INSERT INTO idempotency (request_id, endpoint, request_hash, state, created_at)
+            VALUES (${row.requestId}, ${row.endpoint}, ${row.requestHash}, 'in_flight', ${now()})
+            ON CONFLICT (request_id) DO NOTHING
+            RETURNING request_id`,
+      );
+      return inserted.length > 0;
+    },
+    async markDone(requestId, statusCode, body) {
+      const updated = await tx.execute<{ request_id: string }>(
+        sql`UPDATE idempotency
+            SET state = 'done',
+                status_code = ${statusCode},
+                response_body = ${JSON.stringify(body ?? null)},
+                completed_at = ${now()}
+            WHERE request_id = ${requestId} AND state = 'in_flight'
+            RETURNING request_id`,
+      );
+      return updated.length > 0;
+    },
+    async deleteInFlight(requestId, endpoint, requestHash) {
+      await tx.execute(
+        sql`DELETE FROM idempotency
+            WHERE request_id = ${requestId}
+              AND state = 'in_flight'
+              AND endpoint = ${endpoint}
+              AND request_hash = ${requestHash}`,
+      );
+    },
+  };
+}
+
+function autoCommitStore(db: Db): IdempotencyStore {
+  return {
+    find: (requestId) => withTx(db, (tx) => pgStore(tx).find(requestId)),
+    insertInFlight: (row) => withTx(db, (tx) => pgStore(tx).insertInFlight(row)),
+    markDone: (requestId, statusCode, body) =>
+      withTx(db, (tx) => pgStore(tx).markDone(requestId, statusCode, body)),
+    deleteInFlight: (requestId, endpoint, requestHash) =>
+      withTx(db, (tx) => pgStore(tx).deleteInFlight(requestId, endpoint, requestHash)),
+  };
+}
+
+function coerceStatus(value: number | string | null): number | null {
+  if (value == null) return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isInteger(n) ? n : null;
+}
+
+function decodeBody(value: unknown): unknown {
+  let current = value;
+  for (let i = 0; i < 2 && typeof current === 'string'; i += 1) {
+    const text = current.trim();
+    if (!(text.startsWith('{') || text.startsWith('[') || text.startsWith('"') || text === 'null')) {
+      break;
+    }
+    try {
+      current = JSON.parse(text) as unknown;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+export type { StoredIdempotency };

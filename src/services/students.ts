@@ -12,6 +12,7 @@ import { withTx, type Db, db as defaultDb, sql } from '../repo/db.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
+import { completeIdempotent, idempotentTx, runReservedIdempotent } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import type {
   StudentDto,
@@ -97,7 +98,7 @@ export async function createStudent(
   input: CreateStudentInput,
   db: Db = defaultDb,
 ): Promise<StudentDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, `POST /api/v1/classes/${classId}/students`, input, async (tx) => {
     const cls = await classRepo.lockClass(tx, classId);
     if (!cls) throw Errors.notFound('班级', classId);
     if (cls.archived_at) throw Errors.forbidden('班级已归档，无法新增学生');
@@ -169,7 +170,7 @@ export async function patchStudent(
   input: PatchStudentInput,
   db: Db = defaultDb,
 ): Promise<StudentDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, `PATCH /api/v1/students/${studentId}`, input, async (tx) => {
     const before = await studentRepo.findStudent(tx, studentId);
     if (!before) throw Errors.notFound('学生', studentId);
 
@@ -227,7 +228,7 @@ export async function leaveStudent(
   input: LeaveStudentInput,
   db: Db = defaultDb,
 ): Promise<StudentDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, `POST /api/v1/students/${studentId}/leave`, input, async (tx) => {
     const student = await studentRepo.findStudent(tx, studentId);
     if (!student) throw Errors.notFound('学生', studentId);
     if (student.status !== 'active') {
@@ -292,7 +293,7 @@ export async function restoreStudent(
   input: RestoreStudentInput,
   db: Db = defaultDb,
 ): Promise<StudentDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, `POST /api/v1/students/${studentId}/restore`, input, async (tx) => {
     const student = await studentRepo.findStudent(tx, studentId);
     if (!student) throw Errors.notFound('学生', studentId);
     if (student.status !== 'left') {
@@ -357,8 +358,10 @@ export async function anonymizeStudent(
   studentId: string,
   requestId: string,
   db: Db = defaultDb,
+  options: { idempotent?: boolean } = {},
 ): Promise<{ student: StudentDto; ledger_entry_id: string }> {
   return withTx(db, async (tx) => {
+    const run = async (): Promise<{ student: StudentDto; ledger_entry_id: string }> => {
     const student = await studentRepo.findStudent(tx, studentId);
     if (!student) throw Errors.notFound('学生', studentId);
     if (student.status === 'anonymized') {
@@ -439,31 +442,47 @@ export async function anonymizeStudent(
 
     const seat = await studentRepo.findStudentSeat(tx, student.class_id, studentId);
     return { student: toDto(updated, seat), ledger_entry_id: ledgerEntryId };
+    };
+    if (options.idempotent === false) return run();
+    return completeIdempotent(
+      tx,
+      requestId,
+      `POST /api/v1/students/${studentId}/anonymize`,
+      { request_id: requestId },
+      run,
+    );
   });
 }
 
-/** 班级批量匿名化入口。 */
+/** 班级批量匿名化入口。每人一笔事务，整次请求单独占一个幂等键。 */
 export async function anonymizeClass(
   actorId: string,
   classId: string,
   requestId: string,
   db: Db = defaultDb,
 ): Promise<{ anonymized: number; failed: number; students: string[] }> {
-  const students = await studentRepo.listStudents(db, classId, { status: 'all' });
-  const targets = students.filter((s) => s.status !== 'anonymized');
+  return runReservedIdempotent(
+    db,
+    requestId,
+    `POST /api/v1/classes/${classId}/anonymize`,
+    { request_id: requestId },
+    async () => {
+      const students = await studentRepo.listStudents(db, classId, { status: 'all' });
+      const targets = students.filter((s) => s.status !== 'anonymized');
 
-  const done: string[] = [];
-  let failed = 0;
+      const done: string[] = [];
+      let failed = 0;
 
-  // 逐个匿名化（各自独立事务，保证部分成功可追溯）
-  for (const s of targets) {
-    try {
-      await anonymizeStudent(actorId, s.student_id, requestId, db);
-      done.push(s.student_id);
-    } catch {
-      failed++;
-    }
-  }
+      for (const s of targets) {
+        try {
+          await anonymizeStudent(actorId, s.student_id, requestId, db, { idempotent: false });
+          done.push(s.student_id);
+        } catch {
+          failed++;
+        }
+      }
 
-  return { anonymized: done.length, failed, students: done };
+      return { anonymized: done.length, failed, students: done };
+    },
+  );
 }

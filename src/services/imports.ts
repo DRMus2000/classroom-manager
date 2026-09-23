@@ -19,6 +19,7 @@ import * as classRepo from '../repo/class.js';
 import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
 import { Errors } from '../lib/errors.js';
+import { withIdempotency } from './idempotency.js';
 import { createHash } from 'node:crypto';
 import type { ImportIssue, ImportChange, ImportPreviewDto, ImportTemplateKind } from '../lib/schema.js';
 
@@ -510,16 +511,22 @@ export async function commitImport(
 ): Promise<{ created: number; updated: number; kept: number; seat_version: number }> {
   cleanupPreviews();
 
-  const payload = previews.get(previewToken);
-  if (!payload || payload.classId !== classId) {
-    throw Errors.importTokenExpired('预览令牌无效或已过期，请重新上传文件预览');
-  }
-  if (payload.expiresAt < Date.now()) {
-    previews.delete(previewToken);
-    throw Errors.importTokenExpired();
-  }
+  const outcome = await withTx(db, async (tx) => {
+    return withIdempotency(
+      tx,
+      requestId,
+      `POST /api/v1/classes/${classId}/import/commit`,
+      { preview_token: previewToken, expected_version: expectedVersion, request_id: requestId },
+      async () => {
+        const payload = previews.get(previewToken);
+        if (!payload || payload.classId !== classId) {
+          throw Errors.importTokenExpired('预览令牌无效或已过期，请重新上传文件预览');
+        }
+        if (payload.expiresAt < Date.now()) {
+          previews.delete(previewToken);
+          throw Errors.importTokenExpired();
+        }
 
-  const result = await withTx(db, async (tx) => {
     const cls = await classRepo.lockClass(tx, classId);
     if (!cls) throw Errors.notFound('班级', classId);
 
@@ -613,13 +620,20 @@ export async function commitImport(
       payload: { class_id: classId, action: 'import_committed', created, updated, kept },
     });
 
-    return { created, updated, kept, seat_version: newVersion };
+        return {
+          statusCode: 200,
+          body: { created, updated, kept, seat_version: newVersion },
+        };
+      },
+    );
   });
 
-  previews.delete(previewToken);
-  payloadChangeSets.delete(previewToken);
+  if (!outcome.fromCache) {
+    previews.delete(previewToken);
+    payloadChangeSets.delete(previewToken);
+  }
 
-  return result;
+  return outcome.body;
 }
 
 /**

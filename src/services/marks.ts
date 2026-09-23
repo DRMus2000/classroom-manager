@@ -7,7 +7,8 @@
  *   不能仅靠添加普通图标改变任职状态，因此本模块完全不触碰 duty_* 表。
  */
 
-import { withTx, type Db, db as defaultDb, sql } from '../repo/db.js';
+import { type Db, db as defaultDb, sql } from '../repo/db.js';
+import { idempotentTx } from './idempotency.js';
 import * as studentRepo from '../repo/student.js';
 import * as auditRepo from '../repo/audit.js';
 import { Errors } from '../lib/errors.js';
@@ -36,7 +37,7 @@ export async function createMark(
   input: { name: string; icon: string; color: string; sort_order?: number; request_id: string },
   db: Db = defaultDb,
 ): Promise<MarkDefDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, 'POST /api/v1/marks', input, async (tx) => {
     const created = await studentRepo.createMarkDef(tx, {
       name: input.name,
       icon: input.icon,
@@ -77,7 +78,7 @@ export async function patchMark(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<MarkDefDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, requestId, `PATCH /api/v1/marks/${markId}`, { ...patch, request_id: requestId }, async (tx) => {
     const before = await tx.execute<studentRepo.MarkDefRow>(
       sql`SELECT mark_id, name, icon, color, sort_order, archived_at FROM mark_def WHERE mark_id = ${markId}`,
     );
@@ -127,7 +128,12 @@ export async function addMark(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<void> {
-  await withTx(db, async (tx) => {
+  await idempotentTx(
+    db,
+    requestId,
+    `POST /api/v1/students/${studentId}/marks/${markId}`,
+    { request_id: requestId },
+    async (tx) => {
     const student = await studentRepo.findStudent(tx, studentId);
     if (!student) throw Errors.notFound('学生', studentId);
 
@@ -162,7 +168,12 @@ export async function removeMark(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<void> {
-  await withTx(db, async (tx) => {
+  await idempotentTx(
+    db,
+    requestId,
+    `DELETE /api/v1/students/${studentId}/marks/${markId}`,
+    { request_id: requestId },
+    async (tx) => {
     const student = await studentRepo.findStudent(tx, studentId);
     if (!student) throw Errors.notFound('学生', studentId);
 

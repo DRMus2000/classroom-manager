@@ -12,6 +12,7 @@ import * as authRepo from '../repo/auth.js';
 import * as auditRepo from '../repo/audit.js';
 import { verifyPassword } from '../lib/crypto.js';
 import { Errors } from '../lib/errors.js';
+import { idempotentTx } from './idempotency.js';
 import type { LoginInput, ChangePasswordInput } from '../lib/schema.js';
 
 const MAX_FAILURES = 5;
@@ -97,7 +98,7 @@ export async function changePassword(
   input: ChangePasswordInput,
   db: Db = defaultDb,
 ): Promise<void> {
-  await withTx(db, async (tx) => {
+  await idempotentTx(db, input.request_id, 'POST /api/v1/auth/password', input, async (tx) => {
     const ok = await authRepo.changePassword(tx, teacherId, input.old_password, input.new_password);
     if (!ok) throw Errors.unauthenticated('原密码错误');
 
@@ -121,7 +122,7 @@ export async function logoutOtherDevices(
   requestId: string,
   db: Db = defaultDb,
 ): Promise<void> {
-  await withTx(db, async (tx) => {
+  await idempotentTx(db, requestId, 'POST /api/v1/auth/logout-others', { request_id: requestId }, async (tx) => {
     await authRepo.revokeOtherSessions(tx, teacherId, currentSessionId);
     await auditRepo.writeAudit(tx, {
       actor: teacherId,

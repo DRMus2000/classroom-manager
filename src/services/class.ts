@@ -7,9 +7,10 @@
  * - 学生、座次、普通标记、未结束卫生任期在换学期时全部延续。
  */
 
-import { withTx, type Db, db as defaultDb, sql } from '../repo/db.js';
+import { type Db, db as defaultDb, sql } from '../repo/db.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
+import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import type {
   ClassDto,
@@ -49,7 +50,7 @@ export async function createClass(
   input: CreateClassInput,
   db: Db = defaultDb,
 ): Promise<ClassDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, 'POST /api/v1/classes', input, async (tx) => {
     const cls = await classRepo.createClass(tx, input.name);
 
     await auditRepo.writeAudit(tx, {
@@ -87,7 +88,7 @@ export async function patchClass(
   input: PatchClassInput,
   db: Db = defaultDb,
 ): Promise<ClassDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, `PATCH /api/v1/classes/${classId}`, input, async (tx) => {
     const before = await classRepo.findClass(tx, classId);
     if (!before) throw Errors.notFound('班级', classId);
 
@@ -146,7 +147,7 @@ export async function createTerm(
   input: CreateTermInput,
   db: Db = defaultDb,
 ): Promise<TermDto> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, 'POST /api/v1/terms', input, async (tx) => {
     const term = await classRepo.createTerm(tx, input.name);
 
     await auditRepo.writeAudit(tx, {
@@ -187,7 +188,7 @@ export async function activateTerm(
   input: ActivateTermInput,
   db: Db = defaultDb,
 ): Promise<{ term: TermDto; initialized_students: number; closed_terms: number }> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(db, input.request_id, `POST /api/v1/terms/${termId}/activate`, input, async (tx) => {
     const target = await classRepo.findTerm(tx, termId);
     if (!target) throw Errors.notFound('学期', termId);
 

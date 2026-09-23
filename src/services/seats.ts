@@ -7,7 +7,8 @@
  * - 积分快照记录操作当时的座位号（永不回溯），故换座不修改任何历史明细。
  */
 
-import { withTx, type Db, db as defaultDb } from '../repo/db.js';
+import { type Db, db as defaultDb } from '../repo/db.js';
+import { idempotentTx } from './idempotency.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as pointsRepo from '../repo/points.js';
@@ -155,7 +156,12 @@ export async function applySeatAssignments(
   input: SeatAssignmentsInput,
   db: Db = defaultDb,
 ): Promise<{ seat_version: number }> {
-  return withTx(db, async (tx) => {
+  return idempotentTx(
+    db,
+    input.request_id,
+    `POST /api/v1/classes/${classId}/seats/apply`,
+    input,
+    async (tx) => {
     // 锁班级行（并发保护）
     const cls = await classRepo.lockClass(tx, classId);
     if (!cls) throw Errors.notFound('班级', classId);
