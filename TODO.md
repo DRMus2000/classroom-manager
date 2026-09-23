@@ -37,7 +37,7 @@
 - [x] 把名单导入的预览和提交接到 `POST /classes/:id/import/preview` 与 `/commit`，并提供两个 Excel 模板下载
 - [x] 把学生匿名化、班级匿名化接到对应路由；外部账本失败则整次回滚
 - [x] 把普通标记的定义和打标接到 `/marks` 与 `/students/:id/marks/:mark_id`
-- [ ] 把审计查询和备份记录接到 `/audit` 与 `/backup/records`
+- [x] 把审计查询和备份记录接到 `/audit` 与 `/backup/records`
 - [ ] 积分模板：全局模板、班内覆盖、班内私有模板
 - [ ] 卫生服务：开始轮次、计次、未推椅子、`1/3 → 1/4`、冻结候选、抽选、取消不重抽、确认、纠正失效、关轮
 - [ ] 排行榜 `GET /leaderboard`，并列名次为 `1, 1, 3`

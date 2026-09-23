@@ -21,6 +21,7 @@ import * as layoutService from './services/layout.js';
 import * as seatService from './services/seats.js';
 import * as pointsService from './services/points.js';
 import * as markService from './services/marks.js';
+import * as auditService from './services/audit.js';
 import * as importService from './services/imports.js';
 import {
   MAX_IMPORT_BYTES,
@@ -34,6 +35,7 @@ import {
 } from './services/importTemplate.js';
 import {
   activateTermInput,
+  auditQuery,
   applyLayoutChangeInput,
   changePasswordInput,
   createBatchInput,
@@ -229,6 +231,17 @@ export async function buildServer() {
     const body = parse<ReturnType<typeof markAssignInput.parse>>(markAssignInput, request.body);
     await markService.removeMark(user.teacher_id, params.id, params.mark_id, body.request_id);
     return { ok: true };
+  });
+
+  app.get('/api/v1/audit', async (request) => {
+    await requireUser(request);
+    const query = parse<ReturnType<typeof auditQuery.parse>>(auditQuery, request.query);
+    return auditService.listAudit(query);
+  });
+
+  app.get('/api/v1/backup/records', async (request) => {
+    await requireUser(request);
+    return auditService.listBackups();
   });
 
   app.get('/api/v1/classes', async (request) => {

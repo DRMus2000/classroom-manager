@@ -11,6 +11,18 @@ import { db as defaultDb } from '../repo/db.js';
 import * as auditRepo from '../repo/audit.js';
 import type { AuditQuery, BackupRecordDto } from '../lib/schema.js';
 
+function isoTimestamp(value: Date | string | null | undefined): string | null {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function requiredIso(value: Date | string): string {
+  const iso = isoTimestamp(value);
+  if (!iso) throw new Error('时间字段无法解析');
+  return iso;
+}
+
 export interface AuditDto {
   audit_id: number;
   actor: string | null;
@@ -44,7 +56,7 @@ export async function listAudit(
 
   return {
     items: page.map((r) => ({
-      audit_id: r.audit_id,
+      audit_id: Number(r.audit_id),
       actor: r.actor,
       entity: r.entity,
       entity_id: r.entity_id,
@@ -52,9 +64,9 @@ export async function listAudit(
       before: r.before,
       after: r.after,
       request_id: r.request_id,
-      created_at: r.created_at.toISOString(),
+      created_at: requiredIso(r.created_at),
     })),
-    next_cursor: hasMore ? String(page[page.length - 1]!.audit_id) : null,
+    next_cursor: hasMore ? String(Number(page[page.length - 1]!.audit_id)) : null,
   };
 }
 
@@ -63,12 +75,12 @@ export async function listBackups(db: Db = defaultDb): Promise<BackupRecordDto[]
   return rows.map((r) => ({
     backup_id: r.backup_id,
     file_name: r.file_name,
-    size_bytes: r.size_bytes,
-    disk_free_bytes: r.disk_free_bytes,
+    size_bytes: r.size_bytes == null ? null : Number(r.size_bytes),
+    disk_free_bytes: r.disk_free_bytes == null ? null : Number(r.disk_free_bytes),
     status: r.status,
     error: r.error,
-    started_at: r.started_at.toISOString(),
-    finished_at: r.finished_at?.toISOString() ?? null,
+    started_at: requiredIso(r.started_at),
+    finished_at: isoTimestamp(r.finished_at),
   }));
 }
 
@@ -88,13 +100,14 @@ export async function backupHealth(db: Db = defaultDb): Promise<{
 
   const success = rows.find((r) => r.status === 'success');
   const failure = rows.find((r) => r.status === 'failed');
-  const diskFree = rows.find((r) => r.disk_free_bytes != null)?.disk_free_bytes ?? null;
+  const rawFree = rows.find((row) => row.disk_free_bytes != null)?.disk_free_bytes;
+  const diskFree = rawFree == null ? null : Number(rawFree);
 
   const DISK_WARN_BYTES = 3 * 1024 * 1024 * 1024; // 3 GB
 
   return {
-    last_success_at: success?.finished_at?.toISOString() ?? null,
-    last_failure_at: failure?.finished_at?.toISOString() ?? null,
+    last_success_at: isoTimestamp(success?.finished_at),
+    last_failure_at: isoTimestamp(failure?.finished_at),
     last_failure_error: failure?.error ?? null,
     disk_free_bytes: diskFree,
     disk_warning: diskFree != null && diskFree < DISK_WARN_BYTES,

@@ -620,7 +620,7 @@ export const auditQuery = z.object({
   action: z.string().optional(),
   date_from: isoDateTime.optional(),
   date_to: isoDateTime.optional(),
-  cursor: z.string().optional(),
+  cursor: z.string().regex(/^\d+$/).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 export type AuditQuery = z.infer<typeof auditQuery>;
