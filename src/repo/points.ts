@@ -1,0 +1,525 @@
+/**
+ * 积分账本数据访问：point_batch / point_entry / point_balance / reason_template。
+ *
+ * 约定（A5/A6/A7）：
+ * - 账本只追加。撤销 = 插入反向明细 + 更新原明细 status/reversed_by_entry_id。
+ * - 余额与账本同事务维护；last_change_seq 用于并列破序。
+ * - 一次批量 → 一个批次，共享同一 occurred_at。
+ */
+
+import { sql, type Db, type Tx, now } from './db.js';
+import type { EntryStatus, Polarity } from '../lib/schema.js';
+
+export interface ReasonTemplateRow {
+  template_id: string;
+  name: string;
+  polarity: Polarity;
+  default_delta: number;
+  hidden_by_default: boolean;
+  sort_order: number;
+}
+
+export interface ClassTemplateOverrideRow {
+  class_id: string;
+  template_id: string;
+  name: string | null;
+  default_delta: number | null;
+  hidden: boolean | null;
+  added_in_class: boolean;
+}
+
+export interface BatchRow {
+  batch_id: string;
+  term_id: string;
+  class_id: string;
+  template_id: string | null;
+  reason_snapshot: { name: string; polarity: Polarity; source: 'global' | 'class' | 'none' } | null;
+  delta_value: number;
+  member_count: number;
+  kind: 'score' | 'reversal';
+  reverses_batch_id: string | null;
+  partial_reversed: boolean;
+  occurred_at: Date;
+  teacher_id: string | null;
+  request_id: string;
+}
+
+export interface EntryRow {
+  entry_id: string;
+  batch_id: string;
+  student_id: string;
+  term_id: string;
+  class_id_snapshot: string;
+  delta: number;
+  balance_after: number;
+  seat_id: string | null;
+  seat_number_snapshot: number | null;
+  reason_snapshot: unknown;
+  status: EntryStatus;
+  reverses_entry_id: string | null;
+  reversed_by_entry_id: string | null;
+  occurred_at: Date;
+  seq: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* 模板                                                                */
+/* ------------------------------------------------------------------ */
+
+export async function listTemplates(db: Db | Tx): Promise<ReasonTemplateRow[]> {
+  const rows = await db.execute<ReasonTemplateRow>(
+    sql`SELECT template_id, name, polarity, default_delta, hidden_by_default, sort_order
+        FROM reason_template ORDER BY sort_order, name`,
+  );
+  return rows;
+}
+
+export async function findTemplate(db: Db | Tx, templateId: string): Promise<ReasonTemplateRow | null> {
+  const rows = await db.execute<ReasonTemplateRow>(
+    sql`SELECT template_id, name, polarity, default_delta, hidden_by_default, sort_order
+        FROM reason_template WHERE template_id = ${templateId}`,
+  );
+  return rows[0] ?? null;
+}
+
+export async function createTemplate(
+  db: Db | Tx,
+  input: { name: string; polarity: Polarity; default_delta: number; sort_order?: number },
+): Promise<ReasonTemplateRow> {
+  const rows = await db.execute<ReasonTemplateRow>(
+    sql`INSERT INTO reason_template (name, polarity, default_delta, sort_order)
+        VALUES (${input.name}, ${input.polarity}, ${input.default_delta}, ${input.sort_order ?? 0})
+        RETURNING template_id, name, polarity, default_delta, hidden_by_default, sort_order`,
+  );
+  return rows[0]!;
+}
+
+/** 班级覆盖清单。 */
+export async function listClassOverrides(
+  db: Db | Tx,
+  classId: string,
+): Promise<ClassTemplateOverrideRow[]> {
+  const rows = await db.execute<ClassTemplateOverrideRow>(
+    sql`SELECT class_id, template_id, name, default_delta, hidden, added_in_class
+        FROM class_template_override WHERE class_id = ${classId}`,
+  );
+  return rows;
+}
+
+/** 写入/更新班级覆盖（字段级）。 */
+export async function upsertClassOverride(
+  db: Tx,
+  classId: string,
+  templateId: string,
+  patch: { name?: string | null; default_delta?: number | null; hidden?: boolean | null; added_in_class?: boolean },
+): Promise<void> {
+  await db.execute(
+    sql`INSERT INTO class_template_override (class_id, template_id, name, default_delta, hidden, added_in_class)
+        VALUES (${classId}, ${templateId}, ${patch.name ?? null}, ${patch.default_delta ?? null},
+                ${patch.hidden ?? null}, ${patch.added_in_class ?? false})
+        ON CONFLICT (class_id, template_id) DO UPDATE
+          SET name = COALESCE(EXCLUDED.name, class_template_override.name),
+              default_delta = COALESCE(EXCLUDED.default_delta, class_template_override.default_delta),
+              hidden = COALESCE(EXCLUDED.hidden, class_template_override.hidden),
+              added_in_class = class_template_override.added_in_class OR EXCLUDED.added_in_class`,
+  );
+}
+
+/** 清除班级覆盖（回落全局）。 */
+export async function deleteClassOverride(db: Tx, classId: string, templateId: string): Promise<void> {
+  await db.execute(
+    sql`DELETE FROM class_template_override WHERE class_id = ${classId} AND template_id = ${templateId}`,
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 批次与明细                                                          */
+/* ------------------------------------------------------------------ */
+
+/** 查询批次（含明细）。 */
+export async function findBatchWithEntries(
+  db: Db | Tx,
+  batchId: string,
+): Promise<{ batch: BatchRow; entries: EntryRow[] } | null> {
+  const batchRows = await db.execute<BatchRow>(
+    sql`SELECT batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
+               member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id
+        FROM point_batch WHERE batch_id = ${batchId}`,
+  );
+  const batch = batchRows[0];
+  if (!batch) return null;
+
+  const entries = await db.execute<EntryRow>(
+    sql`SELECT entry_id, batch_id, student_id, term_id, class_id_snapshot, delta, balance_after,
+               seat_id, seat_number_snapshot, reason_snapshot, status,
+               reverses_entry_id, reversed_by_entry_id, occurred_at, seq
+        FROM point_entry WHERE batch_id = ${batchId} ORDER BY seq`,
+  );
+
+  return { batch, entries };
+}
+
+/** 查询单条明细。 */
+export async function findEntry(db: Db | Tx, entryId: string): Promise<EntryRow | null> {
+  const rows = await db.execute<EntryRow>(
+    sql`SELECT entry_id, batch_id, student_id, term_id, class_id_snapshot, delta, balance_after,
+               seat_id, seat_number_snapshot, reason_snapshot, status,
+               reverses_entry_id, reversed_by_entry_id, occurred_at, seq
+        FROM point_entry WHERE entry_id = ${entryId}`,
+  );
+  return rows[0] ?? null;
+}
+
+/** 插入批次。 */
+export async function insertBatch(
+  db: Tx,
+  input: {
+    term_id: string;
+    class_id: string;
+    template_id: string | null;
+    reason_snapshot: unknown;
+    delta_value: number;
+    member_count: number;
+    kind: 'score' | 'reversal';
+    reverses_batch_id?: string | null;
+    teacher_id: string | null;
+    request_id: string;
+  },
+): Promise<BatchRow> {
+  const rows = await db.execute<BatchRow>(
+    sql`INSERT INTO point_batch
+          (term_id, class_id, template_id, reason_snapshot, delta_value, member_count,
+           kind, reverses_batch_id, teacher_id, request_id)
+        VALUES (${input.term_id}, ${input.class_id}, ${input.template_id},
+                ${input.reason_snapshot ? JSON.stringify(input.reason_snapshot) : null},
+                ${input.delta_value}, ${input.member_count}, ${input.kind},
+                ${input.reverses_batch_id ?? null}, ${input.teacher_id}, ${input.request_id})
+        RETURNING batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
+                  member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id`,
+  );
+  return rows[0]!;
+}
+
+/**
+ * 插入明细 + 同事务更新余额。
+ * 返回写入后的明细（含 balance_after 与 seq）。
+ */
+export async function insertEntry(
+  db: Tx,
+  input: {
+    batch_id: string;
+    student_id: string;
+    term_id: string;
+    class_id_snapshot: string;
+    delta: number;
+    seat_id: string | null;
+    seat_number_snapshot: number | null;
+    reason_snapshot: unknown;
+    occurred_at: Date;
+    reverses_entry_id?: string | null;
+  },
+): Promise<EntryRow> {
+  // 锁定余额行，计算新余额
+  const balRows = await db.execute<{ balance: number; last_change_seq: number }>(
+    sql`SELECT balance, last_change_seq FROM point_balance
+        WHERE term_id = ${input.term_id} AND student_id = ${input.student_id}
+        FOR UPDATE`,
+  );
+
+  const prevBalance = balRows[0]?.balance ?? 0;
+  const newBalance = prevBalance + input.delta;
+
+  // 先插入明细拿到 seq
+  const entryRows = await db.execute<EntryRow>(
+    sql`INSERT INTO point_entry
+          (batch_id, student_id, term_id, class_id_snapshot, delta, balance_after,
+           seat_id, seat_number_snapshot, reason_snapshot, occurred_at, reverses_entry_id)
+        VALUES (${input.batch_id}, ${input.student_id}, ${input.term_id}, ${input.class_id_snapshot},
+                ${input.delta}, ${newBalance}, ${input.seat_id}, ${input.seat_number_snapshot},
+                ${input.reason_snapshot ? JSON.stringify(input.reason_snapshot) : null},
+                ${input.occurred_at}, ${input.reverses_entry_id ?? null})
+        RETURNING entry_id, batch_id, student_id, term_id, class_id_snapshot, delta, balance_after,
+                  seat_id, seat_number_snapshot, reason_snapshot, status,
+                  reverses_entry_id, reversed_by_entry_id, occurred_at, seq`,
+  );
+  const entry = entryRows[0]!;
+
+  // 更新余额 + last_change_seq（口径：最近一次积分变化）
+  await db.execute(
+    sql`INSERT INTO point_balance (term_id, student_id, balance, last_change_seq, updated_at)
+        VALUES (${input.term_id}, ${input.student_id}, ${newBalance}, ${entry.seq}, ${now()})
+        ON CONFLICT (term_id, student_id) DO UPDATE
+          SET balance = ${newBalance},
+              last_change_seq = ${entry.seq},
+              updated_at = ${now()}`,
+  );
+
+  return entry;
+}
+
+/** 同一批次共用回放事件序号作为并列破序键。 */
+export async function setTieBreakSeq(
+  db: Tx,
+  termId: string,
+  studentIds: string[],
+  eventSeq: number,
+): Promise<void> {
+  if (studentIds.length === 0) return;
+  await db.execute(
+    sql`UPDATE point_balance
+        SET last_change_seq = ${eventSeq}
+        WHERE term_id = ${termId} AND student_id = ANY(${studentIds})`,
+  );
+}
+
+/** 标记明细为已冲销（撤销时调用）。 */
+export async function markEntryReversed(
+  db: Tx,
+  entryId: string,
+  reversedByEntryId: string,
+): Promise<void> {
+  await db.execute(
+    sql`UPDATE point_entry
+        SET status = 'reversed', reversed_by_entry_id = ${reversedByEntryId}
+        WHERE entry_id = ${entryId} AND status = 'effective'`,
+  );
+}
+
+/** 更新批次的 partial_reversed 标记。 */
+export async function setBatchPartialReversed(db: Tx, batchId: string, value: boolean): Promise<void> {
+  await db.execute(
+    sql`UPDATE point_batch SET partial_reversed = ${value} WHERE batch_id = ${batchId}`,
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 查询：时间线与余额                                                  */
+/* ------------------------------------------------------------------ */
+
+export interface EntryFilter {
+  term_id?: string;
+  class_id?: string;
+  student_id?: string;
+  date_from?: Date;
+  date_to?: Date;
+  direction?: 'add' | 'sub';
+  reason_template_id?: string;
+  include_reversals?: boolean;
+  limit?: number;
+  cursor_seq?: number;
+}
+
+/** 按筛选条件查询明细（时间线）。 */
+export async function listEntries(db: Db | Tx, f: EntryFilter): Promise<EntryRow[]> {
+  const conds = [sql`true`];
+  if (f.term_id) conds.push(sql`e.term_id = ${f.term_id}`);
+  if (f.class_id) conds.push(sql`e.class_id_snapshot = ${f.class_id}`);
+  if (f.student_id) conds.push(sql`e.student_id = ${f.student_id}`);
+  if (f.date_from) conds.push(sql`e.occurred_at >= ${f.date_from}`);
+  if (f.date_to) conds.push(sql`e.occurred_at <= ${f.date_to}`);
+  if (f.direction === 'add') conds.push(sql`e.delta > 0`);
+  if (f.direction === 'sub') conds.push(sql`e.delta < 0`);
+  if (f.include_reversals === false) conds.push(sql`e.reverses_entry_id IS NULL`);
+  if (f.reason_template_id) conds.push(sql`b.template_id = ${f.reason_template_id}`);
+  if (f.cursor_seq != null) conds.push(sql`e.seq < ${f.cursor_seq}`);
+
+  const limit = f.limit ?? 50;
+
+  const rows = await db.execute<EntryRow & { student_name: string | null }>(
+    sql`SELECT e.entry_id, e.batch_id, e.student_id, e.term_id, e.class_id_snapshot, e.delta,
+               e.balance_after, e.seat_id, e.seat_number_snapshot, e.reason_snapshot, e.status,
+               e.reverses_entry_id, e.reversed_by_entry_id, e.occurred_at, e.seq,
+               COALESCE(st.name, st.anon_code, '') AS student_name
+        FROM point_entry e
+        JOIN point_batch b ON b.batch_id = e.batch_id
+        LEFT JOIN student st ON st.student_id = e.student_id
+        WHERE ${sql.join(conds, sql` AND `)}
+        ORDER BY e.seq DESC
+        LIMIT ${limit}`,
+  );
+  return rows;
+}
+
+/** 按批次分组的时间线（班级流水）。 */
+export async function listTimeline(
+  db: Db | Tx,
+  f: EntryFilter,
+): Promise<
+  {
+    batch_id: string;
+    occurred_at: Date;
+    delta_value: number;
+    member_count: number;
+    kind: 'score' | 'reversal';
+    reason_snapshot: unknown;
+    entries: {
+      entry_id: string;
+      student_id: string;
+      student_name: string;
+      delta: number;
+      balance_after: number;
+      status: EntryStatus;
+      seat_number_snapshot: number | null;
+    }[];
+  }[]
+> {
+  const entries = await listEntries(db, { ...f, limit: f.limit ?? 200 });
+  if (entries.length === 0) return [];
+
+  const batchIds = [...new Set(entries.map((e) => e.batch_id))];
+  const batches = await db.execute<BatchRow>(
+    sql`SELECT batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
+               member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id
+        FROM point_batch WHERE batch_id = ANY(${batchIds})`,
+  );
+  const batchMap = new Map(batches.map((b) => [b.batch_id, b]));
+
+  const byBatch = new Map<string, typeof entries>();
+  for (const e of entries) {
+    const arr = byBatch.get(e.batch_id) ?? [];
+    arr.push(e);
+    byBatch.set(e.batch_id, arr);
+  }
+
+  return [...byBatch.entries()]
+    .map(([batchId, rows]) => {
+      const b = batchMap.get(batchId)!;
+      return {
+        batch_id: batchId,
+        occurred_at: b.occurred_at,
+        delta_value: b.delta_value,
+        member_count: b.member_count,
+        kind: b.kind,
+        reason_snapshot: b.reason_snapshot,
+        entries: rows.map((e) => ({
+          entry_id: e.entry_id,
+          student_id: e.student_id,
+          student_name: (e as any).student_name ?? '',
+          delta: e.delta,
+          balance_after: e.balance_after,
+          status: e.status,
+          seat_number_snapshot: e.seat_number_snapshot,
+        })),
+      };
+    })
+    .sort((a, b) => b.occurred_at.getTime() - a.occurred_at.getTime());
+}
+
+/**
+ * 批量查询多名学生在某学期的余额（座位图渲染用，避免 N+1）。
+ * 返回 Map<student_id, balance>；无余额行的学生按 0 处理。
+ */
+export async function listBalancesForStudents(
+  db: Db | Tx,
+  termId: string,
+  studentIds: string[],
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (studentIds.length === 0) return map;
+
+  const rows = await db.execute<{ student_id: string; balance: number }>(
+    sql`SELECT student_id, balance FROM point_balance
+        WHERE term_id = ${termId} AND student_id = ANY(${studentIds})`,
+  );
+  for (const r of rows) map.set(r.student_id, r.balance);
+
+  // 补齐缺失的学生为 0（新入班尚未记分）
+  for (const id of studentIds) if (!map.has(id)) map.set(id, 0);
+
+  return map;
+}
+
+/** 查询学生在某学期的余额行。 */
+export async function findBalance(
+  db: Db | Tx,
+  termId: string,
+  studentId: string,
+): Promise<{ balance: number; last_change_seq: number } | null> {
+  const rows = await db.execute<{ balance: number; last_change_seq: number }>(
+    sql`SELECT balance, last_change_seq FROM point_balance
+        WHERE term_id = ${termId} AND student_id = ${studentId}`,
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * 排行榜（并列 + 破并列：最近一次积分变化）。
+ * 排序：balance DESC, last_change_seq ASC, 班级名, 学号。只含在班学生。
+ */
+export async function listRanked(
+  db: Db | Tx,
+  termId: string,
+  classId?: string,
+): Promise<
+  {
+    student_id: string;
+    student_name: string;
+    student_no: string;
+    class_id: string;
+    class_name: string;
+    balance: number;
+    last_change_seq: number;
+  }[]
+> {
+  const filter = classId ? sql`AND st.class_id = ${classId}` : sql``;
+  const rows = await db.execute<{
+    student_id: string;
+    student_name: string;
+    student_no: string;
+    class_id: string;
+    class_name: string;
+    balance: number;
+    last_change_seq: number;
+  }>(
+    sql`SELECT st.student_id,
+               COALESCE(NULLIF(st.name, ''), st.anon_code, '') AS student_name,
+               st.student_no, st.class_id, c.name AS class_name,
+               pb.balance, pb.last_change_seq
+        FROM point_balance pb
+        JOIN student st ON st.student_id = pb.student_id
+        JOIN class c ON c.class_id = st.class_id
+        WHERE pb.term_id = ${termId}
+          AND st.status = 'active'
+          ${filter}
+        ORDER BY pb.balance DESC, pb.last_change_seq ASC, c.name, st.student_no`,
+  );
+  return rows;
+}
+
+/**
+ * 全量重算余额（维护命令用）：从账本重放并与缓存比对。
+ * 返回不一致的明细清单。
+ */
+export async function recomputeBalances(
+  db: Db | Tx,
+  termId: string,
+): Promise<{ student_id: string; cached: number; computed: number; last_change_seq: number }[]> {
+  const rows = await db.execute<{
+    student_id: string;
+    cached: number;
+    computed: number;
+    last_change_seq: number;
+  }>(
+        sql`WITH ledger AS (
+          SELECT pe.student_id,
+                 SUM(pe.delta)::int AS computed,
+                 COALESCE(MAX(ev.event_seq), 0) AS last_change_seq
+          FROM point_entry pe
+          LEFT JOIN event_log ev
+            ON ev.kind = 'points_appended'
+           AND ev.payload->>'batch_id' = pe.batch_id::text
+          WHERE pe.term_id = ${termId} AND pe.status = 'effective'
+          GROUP BY pe.student_id
+        )
+        SELECT COALESCE(pb.student_id, l.student_id) AS student_id,
+               COALESCE(pb.balance, 0) AS cached,
+               COALESCE(l.computed, 0) AS computed,
+               COALESCE(l.last_change_seq, 0) AS last_change_seq
+        FROM point_balance pb
+        FULL OUTER JOIN ledger l ON l.student_id = pb.student_id
+        WHERE pb.term_id = ${termId} OR pb.term_id IS NULL
+        HAVING COALESCE(pb.balance, 0) <> COALESCE(l.computed, 0)
+            OR pb.last_change_seq IS DISTINCT FROM COALESCE(l.last_change_seq, 0)`,
+  );
+  return rows;
+}

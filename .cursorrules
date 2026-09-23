@@ -1,0 +1,48 @@
+# 电脑室学生积分管理系统
+
+实现以 `docs/DESIGN.md`、`docs/SCHEMA.md`、`docs/API.md` 为准。`docs/DEVIATIONS.md` 只记录尚未对齐的代码。不要另起一套表名、路径或错误码。
+
+## 目录
+
+```
+src/domain/     纯函数。禁止访问数据库、文件系统和网络。
+src/repo/       SQL。一行业务规则不要写在这里。
+src/services/   事务、幂等、审计、发事件。一个用例一个函数。
+src/server.ts   HTTP、Cookie、Zod 解析。不写座次、积分或卫生规则。
+src/lib/        契约、错误、密码。
+src/events/     SSE 广播。
+web/src/        页面与交互。契约与 src/lib/schema.ts 保持同一套字段名。
+migrations/     手写 SQL。改表先改 docs/SCHEMA.md，再改迁移。
+test/           纯函数用 node:test。需要数据库的测试单独放，不连开发库。
+```
+
+调用方向只允许：`server → services → repo`，`services → domain`。`domain` 不得引用 `repo` 或 `services`。
+
+## 命名
+
+- 数据库列、JSON 字段、查询参数用 snake_case：`seat_id`、`expected_version`、`request_id`。
+- TypeScript 函数和变量用 camelCase。文件名沿用现有风格：`seatMove.ts`、`renumber.ts`。
+- 表名用单数：`student`、`point_entry`、`duty_round`。
+- 错误码用 SCREAMING_SNAKE，并且必须已经列在 `src/lib/schema.ts` 的 `ERROR_CODES` 里。
+- 座位引用用 `seat_id`。`seat_number` 只用于显示。历史记录写 `seat_number_snapshot`，编号重排不得改写快照。
+
+## 错误
+
+- 业务失败抛 `AppError`。HTTP 状态只从 `ERROR_HTTP_STATUS` 读取。
+- Zod 校验失败返回 400，`code` 为 `VALIDATION_FAILED`，`details.issues` 逐字段列出。
+- 版本过期返回 409 `VERSION_CONFLICT`。同一次 `request_id` 但请求体不同返回 409 `IDEMPOTENCY_MISMATCH`。
+- 响应体保持：
+
+```json
+{ "error": { "code": "VERSION_CONFLICT", "message": "…", "details": {}, "request_id": "…" } }
+```
+
+- 日志不写密码、密码哈希、会话令牌、Cookie，也不写匿名化之前的姓名和学号。
+- 新增错误码时同时改 `ERROR_CODES`、`ERROR_HTTP_STATUS`、`docs/API.md` 和 `web/src/lib/schema.ts`。
+
+## 写入
+
+- 写操作放在一个数据库事务里。审计和 `event_log` 与业务数据一起提交。SSE 在事务提交成功之后再广播。
+- 记分、导入、换座、布局、卫生抽选必须带 `request_id`。座次和卫生轮次必须带 `expected_version`。切学期带 `expected_current_term_id`。
+- 积分只追加。撤销插入反向明细，不更新原明细的分值。卫生操作不写 `point_entry`。
+- 同一记分批次的 `occurred_at` 相同，`point_balance.last_change_seq` 使用该批次的回放事件序号。
