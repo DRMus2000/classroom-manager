@@ -1,7 +1,7 @@
 /**
  * HTTP 入口。路由调用已经按设计文档改过的服务。
- * 卫生、回放、点名、倒计时和导出仍没有对应服务，这些路径返回 404。
- * 名单导入提供模板下载、预览和提交。
+ * 导出仍没有对应服务，这些路径返回 404。
+ * 名单导入提供模板下载、预览和提交。点名与倒计时写入后广播 SSE。
  */
 
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
@@ -25,6 +25,8 @@ import * as auditService from './services/audit.js';
 import * as dutyService from './services/duty.js';
 import * as replayService from './services/replay.js';
 import * as importService from './services/imports.js';
+import * as rollcallService from './services/rollcall.js';
+import * as countdownService from './services/countdown.js';
 import {
   MAX_IMPORT_BYTES,
   XLSX_MIME,
@@ -75,6 +77,11 @@ import {
   seatAssignmentsInput,
   sseQuery,
   uuid,
+  openRollcallInput,
+  drawRollcallInput,
+  excludeRollcallInput,
+  closeRollcallInput,
+  countdownCommandInput,
 } from './lib/schema.js';
 
 const SESSION_COOKIE = 'session';
@@ -695,6 +702,60 @@ export async function buildServer() {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof dutyVersionInput.parse>>(dutyVersionInput, request.body);
     return dutyService.closeRound(user.teacher_id, routeId(request), body.expected_version, body.request_id);
+  });
+
+  app.get('/api/v1/classes/:id/rollcall', async (request) => {
+    await requireUser(request);
+    const round = await rollcallService.getOpenRound(routeId(request));
+    return { round };
+  });
+
+  app.post('/api/v1/rollcall/rounds', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof openRollcallInput.parse>>(openRollcallInput, request.body);
+    return rollcallService.openRound(user.teacher_id, body);
+  });
+
+  app.get('/api/v1/rollcall/rounds/:id', async (request) => {
+    await requireUser(request);
+    return rollcallService.getRound(routeId(request));
+  });
+
+  app.post('/api/v1/rollcall/rounds/:id/draw', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof drawRollcallInput.parse>>(drawRollcallInput, request.body);
+    return rollcallService.draw(user.teacher_id, routeId(request), body.count, body.request_id);
+  });
+
+  app.post('/api/v1/rollcall/rounds/:id/exclude', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof excludeRollcallInput.parse>>(excludeRollcallInput, request.body);
+    return rollcallService.exclude(user.teacher_id, routeId(request), body.student_ids, body.request_id);
+  });
+
+  app.post('/api/v1/rollcall/rounds/:id/close', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof closeRollcallInput.parse>>(closeRollcallInput, request.body);
+    return rollcallService.close(user.teacher_id, routeId(request), body.request_id);
+  });
+
+  app.get('/api/v1/countdown/:class_id', async (request) => {
+    await requireUser(request);
+    const classId = parse<{ class_id: string }>(z.object({ class_id: uuid }), request.params).class_id;
+    return countdownService.getCountdown(classId);
+  });
+
+  app.put('/api/v1/countdown/:class_id', async (request) => {
+    const user = await requireUser(request);
+    const classId = parse<{ class_id: string }>(z.object({ class_id: uuid }), request.params).class_id;
+    const body = parse<ReturnType<typeof countdownCommandInput.parse>>(countdownCommandInput, request.body);
+    return countdownService.commandCountdown(
+      user.teacher_id,
+      classId,
+      body.action,
+      body.duration_sec,
+      body.request_id,
+    );
   });
 
   app.get('/api/v1/events', async (request, reply: FastifyReply) => {

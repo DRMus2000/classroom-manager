@@ -257,11 +257,13 @@
 | GET | `/replay/timeline` | `term_id`、`class_id`、`from`、`to`、`mode=cumulative\|net`。返回起点状态、事件数、检查点、时间轴密度 |
 | GET | `/replay/frames` | 同上，加 `cursor`。每帧一个回放事件，含当时 Top10 |
 | GET | `/replay/state-at` | `at`、`mode`、`term_id`、`class_id` |
+| GET | `/classes/:id/rollcall` | 当前 `open` 轮次。没有时 `round` 为 `null` |
+| GET | `/rollcall/rounds/:id` | 指定轮次，含已关闭 |
 | POST | `/rollcall/rounds` | `{class_id, scope, exclude_student_ids, request_id}`。`scope.type` 为 `all` 或 `selected` |
 | POST | `/rollcall/rounds/:id/draw` | `{count, request_id}`。本轮已抽过的人不再抽中 |
-| POST | `/rollcall/rounds/:id/exclude` | `{student_ids, request_id}` |
-| POST | `/rollcall/rounds/:id/close` | 结束后才能开新的一轮。每班同时只有一个 `open` 轮次 |
-| GET | `/countdown/:class_id` | `status`、`duration_sec`、`deadline_at`、`remaining_sec` |
+| POST | `/rollcall/rounds/:id/exclude` | `{student_ids, request_id}`。并入排除名单 |
+| POST | `/rollcall/rounds/:id/close` | `{request_id}`。结束后才能开新的一轮。每班同时只有一个 `open` 轮次 |
+| GET | `/countdown/:class_id` | `status`、`duration_sec`、`deadline_at`、`remaining_sec`。尚未开始时 `status=reset` 且 `duration_sec` 为 `null` |
 | PUT | `/countdown/:class_id` | `{action, duration_sec?, request_id}`。`action` 为 `start`、`pause`、`resume`、`reset` |
 | GET | `/events` | SSE。查询参数 `since`。也认 `Last-Event-ID` |
 

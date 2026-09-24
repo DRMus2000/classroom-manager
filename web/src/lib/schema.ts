@@ -563,6 +563,50 @@ export type ImportCommitResult = z.infer<typeof importCommitResult>;
 /* 分页                                                                */
 /* ------------------------------------------------------------------ */
 
+export const rollcallScope = z.object({
+  type: z.enum(['all', 'selected']),
+  student_ids: z.array(uuid).max(500).default([]),
+});
+
+export const openRollcallInput = z
+  .object({
+    class_id: uuid,
+    scope: rollcallScope,
+    exclude_student_ids: z.array(uuid).max(500).default([]),
+    request_id: requestId,
+  })
+  .superRefine((value, ctx) => {
+    if (value.scope.type === 'selected' && value.scope.student_ids.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['scope', 'student_ids'],
+        message: '选中范围至少包含一名学生',
+      });
+    }
+  });
+
+export const drawRollcallInput = z.object({
+  count: z.number().int().min(1).max(200),
+  request_id: requestId,
+});
+
+export const excludeRollcallInput = z.object({
+  student_ids: z.array(uuid).min(1).max(500),
+  request_id: requestId,
+});
+
+export const closeRollcallInput = z.object({
+  request_id: requestId,
+});
+
+export const countdownAction = z.enum(['start', 'pause', 'resume', 'reset']);
+
+export const countdownCommandInput = z.object({
+  action: countdownAction,
+  duration_sec: z.number().int().min(1).max(86400).optional(),
+  request_id: requestId,
+});
+
 export function paginated<T extends z.ZodTypeAny>(item: T) {
   return z.object({
     items: z.array(item),
