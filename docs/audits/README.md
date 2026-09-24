@@ -9,5 +9,6 @@
 | [003](003-batch-8217f82-710aef7.md) | 2026-09-24 | `8217f82`、`710aef7`：卫生返工与回放读取 | CHANGES REQUESTED |
 | [004](004-batch-b6929d3-501e10f.md) | 2026-09-25 | `b6929d3`、`501e10f`：点名、倒计时、导出 | CHANGES REQUESTED |
 | [005](005-batch-8029b58-3ac5fda.md) | 2026-09-25 | `8029b58`、`3ac5fda`：时间与 ANY()、前端页面 | CHANGES REQUESTED |
+| [006](006-batch-1a1bd44-3c0b05e.md) | 2026-09-25 | `1a1bd44` 至 `3c0b05e`：检查点、备份、匿名补做、验收测试 | CHANGES REQUESTED |
 
-下一编号：006
+下一编号：007

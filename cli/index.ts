@@ -17,7 +17,7 @@ import * as authRepo from '../src/repo/auth.js';
 import * as pointsRepo from '../src/repo/points.js';
 import { cleanupExpiredIdempotency } from '../src/services/idempotency.js';
 import { writeDueCheckpoints } from '../src/services/replay.js';
-import { dumpWithPgDump, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
+import { dumpWithPgDump, measureDiskFree, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
 import { reapplyAnonLedger, retryFailedLedgerExports } from '../src/services/anonMaintenance.js';
 import { hashPassword } from '../src/lib/crypto.js';
 
@@ -209,6 +209,7 @@ async function backup(): Promise<void> {
     dir: process.env.BACKUP_DIR?.trim() || 'backups',
     retentionDays: resolveRetentionDays(process.env.BACKUP_RETENTION_DAYS),
     dump: (filePath) => dumpWithPgDump(databaseUrl, filePath),
+    diskFree: measureDiskFree,
   });
   if (result.status === 'busy') {
     console.log('另一备份任务正在运行，本次跳过。');
@@ -238,12 +239,18 @@ async function anonReapply(args: Record<string, string>): Promise<void> {
   const confirm = args['confirm'] === 'true';
   const result = await reapplyAnonLedger(confirm);
   if (!confirm) {
-    console.log(`待补做 ${result.pending} 条，已完成 ${result.already} 条，库中无此人 ${result.missing} 条。`);
+    console.log(
+      `待补做 ${result.pending} 条，已完成 ${result.already} 条，库中无此人 ${result.missing} 条，无法识别 ${result.rejected} 条。`,
+    );
     console.log('确认后执行：anon-reapply --confirm');
-    if (result.pending > 0) process.exitCode = 2;
+    if (result.rejected > 0) process.exitCode = 1;
+    else if (result.pending > 0) process.exitCode = 2;
     return;
   }
-  console.log(`✓ 已补做 ${result.applied} 条，原本已匿名 ${result.already} 条，库中无此人 ${result.missing} 条。`);
+  console.log(
+    `✓ 已补做 ${result.applied} 条，原本已匿名 ${result.already} 条，库中无此人 ${result.missing} 条，无法识别 ${result.rejected} 条。`,
+  );
+  if (result.rejected > 0) process.exitCode = 1;
 }
 
 async function anonExportStatus(): Promise<void> {

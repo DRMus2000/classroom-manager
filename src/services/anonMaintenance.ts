@@ -19,6 +19,7 @@ export interface ReapplyResult {
   already: number;
   missing: number;
   pending: number;
+  rejected: number;
 }
 
 interface ExportRow {
@@ -76,7 +77,9 @@ export async function retryFailedLedgerExports(db: Db = defaultDb): Promise<Ledg
           SET state = 'failed', attempts = attempts + 1, last_error = ${message}, updated_at = now()
           WHERE anon_id = ${row.anon_id}
         `);
-      }).catch(() => undefined);
+      }).catch((updateErr: unknown) => {
+        console.error(`匿名账本导出状态更新失败 ${row.anon_id}：${clipError(updateErr)}`);
+      });
     }
   }
   return result;
@@ -86,7 +89,14 @@ export async function reapplyAnonLedger(confirm: boolean, db: Db = defaultDb): P
   const entries = await readLedger();
   if (!confirm) {
     const plan = await classifyEntries(db, entries);
-    return { confirm: false, applied: 0, already: plan.already, missing: plan.missing, pending: plan.pending.length };
+    return {
+      confirm: false,
+      applied: 0,
+      already: plan.already,
+      missing: plan.missing,
+      pending: plan.pending.length,
+      rejected: plan.rejected,
+    };
   }
   return withTx(db, async (tx) => {
     const plan = await classifyEntries(tx, entries);
@@ -148,6 +158,7 @@ export async function reapplyAnonLedger(confirm: boolean, db: Db = defaultDb): P
       already: plan.already,
       missing: plan.missing,
       pending: 0,
+      rejected: plan.rejected,
     };
   });
 }
@@ -155,12 +166,14 @@ export async function reapplyAnonLedger(confirm: boolean, db: Db = defaultDb): P
 async function classifyEntries(
   db: Db,
   entries: AnonLedgerEntry[],
-): Promise<{ pending: AnonLedgerEntry[]; already: number; missing: number }> {
+): Promise<{ pending: AnonLedgerEntry[]; already: number; missing: number; rejected: number }> {
   const latest = new Map<string, AnonLedgerEntry>();
+  let rejected = 0;
   for (const entry of entries) {
-    if (!isUuid(entry.student_id) || !isUuid(entry.class_id) || !isUuid(entry.entry_id)) continue;
-    if (!Number.isInteger(entry.process_version) || entry.process_version < 1) continue;
-    if (!entry.anon_code || entry.anon_code.length > 40) continue;
+    if (!ledgerEntryUsable(entry)) {
+      rejected += 1;
+      continue;
+    }
     const prev = latest.get(`${entry.student_id}:${entry.process_version}`);
     if (!prev) latest.set(`${entry.student_id}:${entry.process_version}`, entry);
   }
@@ -185,7 +198,13 @@ async function classifyEntries(
     if (cleared) already += 1;
     else pending.push(entry);
   }
-  return { pending, already, missing };
+  return { pending, already, missing, rejected };
+}
+
+export function ledgerEntryUsable(entry: AnonLedgerEntry): boolean {
+  return isUuid(entry.student_id) && isUuid(entry.class_id) && isUuid(entry.entry_id)
+    && Number.isInteger(entry.process_version) && entry.process_version >= 1
+    && Boolean(entry.anon_code) && entry.anon_code.length <= 40;
 }
 
 function isUuid(value: string): boolean {

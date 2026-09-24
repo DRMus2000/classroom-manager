@@ -6,7 +6,7 @@
  */
 
 import { closeDb } from '../src/repo/db.js';
-import { dumpWithPgDump, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
+import { dumpWithPgDump, measureDiskFree, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
 
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
@@ -15,6 +15,7 @@ async function main(): Promise<void> {
     dir: process.env.BACKUP_DIR?.trim() || 'backups',
     retentionDays: resolveRetentionDays(process.env.BACKUP_RETENTION_DAYS),
     dump: (filePath) => dumpWithPgDump(databaseUrl, filePath),
+    diskFree: measureDiskFree,
   });
   if (result.status === 'busy') {
     console.log('另一备份任务正在运行，本次跳过。');

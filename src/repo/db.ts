@@ -114,8 +114,9 @@ export async function acquireAdvisoryLock(key: string): Promise<(() => Promise<v
       released = true;
       try {
         await client.query('SELECT pg_advisory_unlock(hashtextextended($1::text, 0))', [key]);
-      } finally {
         client.release();
+      } catch (err) {
+        client.release(err instanceof Error ? err : new Error('咨询锁解锁失败'));
       }
     };
   } catch (err) {

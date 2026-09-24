@@ -2,8 +2,8 @@
  * 每日 pg_dump。失败写入 backup_record 并告警，不进入记分事务。
  */
 
-import { spawn } from 'node:child_process';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdir, readdir, rm, stat, statfs } from 'node:fs/promises';
 import path from 'node:path';
 import { acquireAdvisoryLock, type Db, db as defaultDb } from '../repo/db.js';
 import * as auditRepo from '../repo/audit.js';
@@ -11,6 +11,7 @@ import * as auditRepo from '../repo/audit.js';
 export const DISK_WARN_BYTES = 3 * 1024 * 1024 * 1024;
 export const DEFAULT_RETENTION_DAYS = 30;
 export const BACKUP_LOCK_KEY = 'classroom:pg_dump';
+export const DUMP_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface BackupJobResult {
   status: 'success' | 'failed' | 'busy';
@@ -93,7 +94,19 @@ export function pgDumpArgs(databaseUrlValue: string): { args: string[]; password
   };
 }
 
-export function dumpWithPgDump(databaseUrlValue: string, filePath: string): Promise<void> {
+export function armProcessTimeout(child: ChildProcess, timeoutMs: number, onTimeout: () => void): () => void {
+  const timer = setTimeout(() => {
+    child.kill();
+    onTimeout();
+  }, timeoutMs);
+  return () => clearTimeout(timer);
+}
+
+export function dumpWithPgDump(
+  databaseUrlValue: string,
+  filePath: string,
+  timeoutMs = DUMP_TIMEOUT_MS,
+): Promise<void> {
   const parsed = pgDumpArgs(databaseUrlValue);
   return new Promise((resolve, reject) => {
     const child = spawn('pg_dump', [...parsed.args, '--file', filePath], {
@@ -101,15 +114,34 @@ export function dumpWithPgDump(databaseUrlValue: string, filePath: string): Prom
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      disarm();
+      fn();
+    };
+    const disarm = armProcessTimeout(child, timeoutMs, () => {
+      finish(() => reject(new Error('超时')));
+    });
     child.stderr.on('data', (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString()}`.slice(-2000);
     });
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => finish(() => reject(err)));
     child.on('exit', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(redactSecrets(stderr).trim() || `pg_dump 退出码 ${code ?? 'null'}`));
+      finish(() => {
+        if (code === 0) resolve();
+        else reject(new Error(redactSecrets(stderr).trim() || `pg_dump 退出码 ${code ?? 'null'}`));
+      });
     });
   });
+}
+
+export async function measureDiskFree(dir: string): Promise<number | null> {
+  const info = await statfs(dir);
+  const free = Number(info.bavail) * Number(info.bsize);
+  if (!Number.isFinite(free) || free < 0) return null;
+  return Math.floor(free);
 }
 
 function insideDir(dir: string, fileName: string): string {
@@ -237,8 +269,7 @@ async function readDiskFree(
   dir: string,
   diskFree?: (dir: string) => Promise<number | null>,
 ): Promise<number | null> {
-  if (!diskFree) return null;
-  const free = await diskFree(dir);
+  const free = await (diskFree ?? measureDiskFree)(dir);
   if (free == null) return null;
   if (!Number.isFinite(free) || free < 0) return null;
   return Math.floor(free);

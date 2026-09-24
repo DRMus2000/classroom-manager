@@ -120,6 +120,8 @@ describe('daily pg_dump job', { timeout: 180_000 }, () => {
       });
       assert.equal(empty.status, 'failed');
       assert.match(empty.error ?? '', /为空/);
+      assert.equal(typeof empty.disk_free_bytes, 'number');
+      assert.ok((empty.disk_free_bytes ?? 0) > 0);
 
       const holder = new pg.Client({ connectionString });
       await holder.connect();
@@ -135,9 +137,11 @@ describe('daily pg_dump job', { timeout: 180_000 }, () => {
       await holder.query(`SELECT pg_advisory_unlock(hashtextextended($1::text, 0))`, [BACKUP_LOCK_KEY]);
       await holder.end();
 
-      const recorded = await client.query<{ status: string }>(
-        `SELECT status FROM backup_record ORDER BY started_at`,
+      const recorded = await client.query<{ status: string; disk_free_bytes: string | null }>(
+        `SELECT status, disk_free_bytes FROM backup_record ORDER BY started_at`,
       );
+      const measured = recorded.rows.filter((row) => row.disk_free_bytes != null);
+      assert.ok(measured.length >= 1);
       assert.deepEqual(
         recorded.rows.map((row) => row.status),
         ['success', 'failed', 'failed'],
