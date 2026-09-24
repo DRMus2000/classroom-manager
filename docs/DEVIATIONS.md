@@ -6,7 +6,9 @@
 |---|---|---|
 | 卫生落库 | 轮次状态机整条写入 `duty_*` | 判定在 `src/domain/duty.ts`，还没有卫生服务和路由 |
 | 运维脚本 | 检查点、备份、匿名账本重试 | 已有 `scripts/checkpoint.ts`。备份与匿名账本重试脚本还没有 |
-| 前端页面 | 座位图、三步换座、卫生、回放、全屏 | `web/src` 仍只有客户端、SSE 和在线状态。契约枚举已与后端对齐 |
+| 座位卡卫生徽章 | `GET /classes/:id/seats` 的 `student.duty` 带在任任期 | 服务端仍固定返回 `null`。前端用 `GET /classes/:id/duty` 的在任任期、本轮成员和下一轮新任合成徽章 |
+| 卫生未推椅子 | 登记再次未推椅子即 `eligible_for_backfill = false`；冻结后登记还要移出剩余候选池，并作废抽中此人的未确认抽选 | `markNoPush` 只写 `no_push = true`。冻结时 `candidatesOf` 只看 `eligible_for_backfill`，所以此人仍会进池，冻结后也不会移出。前端候选预览按 `no_push` 排除，但服务端抽选仍可能抽到此人 |
+| 回放时间格式 | 带时区的 ISO 8601 | `/replay/frames` 的 `occurred_at`、`/replay/timeline` 的 `density.at` 透传数据库文本格式（`2026-09-25 02:20:22.09+08`）。前端 `parseTime` 兼容两种写法 |
 | 测试 | 验收表里的导入冲突、记分并发、卫生双设备 | 已有迁移、匿名化、标记、审计的数据库集成测试。验收表里那几条还没写 |
 | 类型检查 | 服务层能通过当前 Drizzle 类型 | `db.execute` 的返回类型与现有调用方式不一致，这是原有问题，本次没有改查询封装 |
 

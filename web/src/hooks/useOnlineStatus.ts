@@ -47,7 +47,11 @@ export function useOnlineStatus(): OnlineStatus {
   }, []);
 
   useEffect(() => {
-    const goOnline = () => setNavigatorOnline(true);
+    // 网卡恢复不代表后端可达，立刻补一次探针，不等下一个周期。
+    const goOnline = () => {
+      setNavigatorOnline(true);
+      setManualTick((n) => n + 1);
+    };
     const goOffline = () => setNavigatorOnline(false);
 
     window.addEventListener('online', goOnline);

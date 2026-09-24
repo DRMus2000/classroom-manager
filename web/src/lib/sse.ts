@@ -50,6 +50,9 @@ export class SseClient {
   /** 已处理的最大 event_seq。重连时作为 ?since= 的值。 */
   private lastEventId = 0;
 
+  /** 不晚于该序号的补发事件直接丢弃（见 snapshot 监听）。 */
+  private skipUpTo = 0;
+
   constructor(opts: SseClientOptions) {
     this.opts = opts;
     this.lastEventId = opts.since ?? 0;
@@ -89,6 +92,7 @@ export class SseClient {
       'marks_changed',
       'duty_round_changed',
       'countdown_changed',
+      'rollcall_changed',
       'resync',
     ];
     for (const kind of kinds) {
@@ -96,6 +100,17 @@ export class SseClient {
         this.handleMessage(ev as MessageEvent<string>, kind);
       });
     }
+
+    // 首次连接（since=0）时服务端会先发 snapshot，再补发全部历史事件。
+    // 页面刚全量拉过数据，历史事件只会引发一串无意义的重拉，按 snapshot 的序号跳过。
+    es.addEventListener('snapshot', (ev) => {
+      const seq = extractSnapshotSeq((ev as MessageEvent<string>).data);
+      if (seq == null) return;
+      if (this.lastEventId === 0) {
+        this.skipUpTo = seq;
+        this.lastEventId = seq;
+      }
+    });
 
     // 兜底：服务端若未设置 event 字段（默认 message），也要能收到
     es.onmessage = (ev) => this.handleMessage(ev, null);
@@ -106,6 +121,17 @@ export class SseClient {
       this.cleanupSocket();
       this.scheduleReconnect();
     };
+  }
+
+  /** 网络恢复时立即重连，跳过剩余退避。保留 lastEventId，服务端据此补发断线期间的事件。 */
+  reconnectNow(): void {
+    if (this.closed) return;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.attempt = 0;
+    this.connect();
   }
 
   /** 主动断开等场景：不再重连。 */
@@ -125,12 +151,15 @@ export class SseClient {
     // id: 字段来自服务端写入的 event_seq
     const idNum = ev.lastEventId ? Number(ev.lastEventId) : NaN;
 
+    if (Number.isFinite(idNum) && idNum <= this.skipUpTo && kindFromEvent !== 'resync') return;
+
     let parsed: SseMessage;
     try {
       const json: unknown = JSON.parse(ev.data);
       const result = sseMessage.safeParse(json);
       if (!result.success) {
         // 契约漂移时不静默丢弃：记为一次 resync 请求更安全
+        if (Number.isFinite(idNum)) this.lastEventId = Math.max(this.lastEventId, idNum);
         this.opts.onResync('malformed_event');
         return;
       }
@@ -186,6 +215,16 @@ export class SseClient {
 }
 
 const resyncPayload = z.object({ reason: z.string().optional() });
+const snapshotPayload = z.object({ current_event_seq: z.coerce.number().int().nonnegative() });
+
+function extractSnapshotSeq(data: string): number | null {
+  try {
+    const parsed = snapshotPayload.safeParse(JSON.parse(data));
+    return parsed.success ? parsed.data.current_event_seq : null;
+  } catch {
+    return null;
+  }
+}
 
 function extractReason(payload: unknown): string | null {
   const parsed = resyncPayload.safeParse(payload);
