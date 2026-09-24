@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { AppError } from '../src/lib/errors.js';
 import {
   drawStudents,
+  parseStoredIdList,
   rollcallPool,
   uniqueIds,
   unknownStudentIds,
@@ -77,6 +79,22 @@ describe('rollcall pool', () => {
     const zero = drawStudents(pool, 0, () => 0);
     assert.equal(zero.ok, false);
     if (!zero.ok) assert.equal(zero.reason, 'invalid_count');
+  });
+
+  it('非法 JSON 名单解析失败，合法数组和坏形状分别给出名单或空名单', () => {
+    assert.deepEqual(parseStoredIdList('["a","b",1]'), ['a', 'b']);
+    assert.deepEqual(parseStoredIdList(['a']), ['a']);
+    assert.deepEqual(parseStoredIdList('{"a":1}'), []);
+    assert.equal(parseStoredIdList('['), null);
+  });
+
+  it('坏 JSON 在服务层变成 INTERNAL，而不是未捕获的解析异常', async () => {
+    process.env.DATABASE_URL ??= 'postgres://unused:unused@127.0.0.1:1/unused';
+    const { readStoredIdList } = await import('../src/services/rollcall.js');
+    assert.throws(
+      () => readStoredIdList('['),
+      (err: unknown) => err instanceof AppError && err.code === 'INTERNAL',
+    );
   });
 
   it('随机下标越界时抛出，避免抽到空位', () => {

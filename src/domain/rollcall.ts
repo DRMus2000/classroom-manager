@@ -23,6 +23,24 @@ export interface DrawnStudent {
   seat_number: number | null;
 }
 
+/**
+ * 读出库里的 id 名单。非法 JSON 返回 null，由服务层转成业务错误。
+ * 不是数组时按空名单处理。
+ */
+export function parseStoredIdList(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string');
+  }
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return null;
+  }
+}
+
 export function uniqueIds(ids: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];

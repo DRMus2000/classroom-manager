@@ -309,7 +309,7 @@ BEGIN
   IF t IS DISTINCT FROM 'open' THEN
     RAISE EXCEPTION 'term_readonly: 学期已归档，禁止写入账本' USING ERRCODE = '55006';
   END IF;
-  RETURN NEW;
+  RETURN NULL;
 END $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_entry_term_open ON point_entry;
 CREATE TRIGGER trg_entry_term_open BEFORE INSERT ON point_entry

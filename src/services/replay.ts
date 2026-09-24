@@ -1,89 +1,196 @@
 /**
- * 回放读取。检查点由独立任务写入，不在记分事务里调用。
+ * 回放读取与检查点任务。检查点在记分事务之外由独立命令写入。
  */
 
-import { sql, type Db, db as defaultDb } from '../repo/db.js';
-import { assignRanks } from '../domain/points.js';
+import { type Db, db as defaultDb } from '../repo/db.js';
+import * as replayRepo from '../repo/replay.js';
+import * as auditRepo from '../repo/audit.js';
+import * as classRepo from '../repo/class.js';
+import {
+  applyReplayEvent,
+  baseStateFromWorld,
+  emptyWorld,
+  rankingFromWorld,
+  snapshotBalances,
+  snapshotWorld,
+  worldFromCheckpoint,
+  type ReplayIdentity,
+  type ReplayWorld,
+} from '../domain/replay.js';
 import type { ReplayMode } from '../lib/schema.js';
 
 export const CHECKPOINT_EVENT_THRESHOLD = 200;
 
-export function shouldWriteCheckpoint(eventsSinceLast: number, dailyDue: boolean): boolean {
+export function shouldWriteCheckpoint(
+  eventsSinceLast: number,
+  dailyDue: boolean,
+  threshold = CHECKPOINT_EVENT_THRESHOLD,
+): boolean {
   if (!Number.isFinite(eventsSinceLast) || eventsSinceLast < 0) return false;
-  return dailyDue || eventsSinceLast >= CHECKPOINT_EVENT_THRESHOLD;
+  if (!Number.isFinite(threshold) || threshold <= 0) return false;
+  return dailyDue || eventsSinceLast >= threshold;
+}
+
+function iso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+function identityMap(rows: ReplayIdentity[]): Map<string, ReplayIdentity> {
+  return new Map(rows.map((row) => [row.student_id, row]));
+}
+
+function configNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return fallback;
+}
+
+async function worldAtSeq(
+  termId: string,
+  classId: string,
+  uptoSeq: number,
+  db: Db,
+): Promise<ReplayWorld> {
+  if (uptoSeq <= 0) return emptyWorld();
+  const checkpoint = await auditRepo.findNearestCheckpoint(db, classId, termId, uptoSeq);
+  const world = checkpoint ? worldFromCheckpoint(checkpoint.state) : emptyWorld();
+  const afterSeq = checkpoint ? Number(checkpoint.upto_event_seq) : 0;
+  const events = await replayRepo.listReplayEventsBetween(db, {
+    termId,
+    classId,
+    afterSeq,
+    uptoSeq,
+  });
+  for (const event of events) {
+    applyReplayEvent(
+      world,
+      { event_seq: Number(event.event_seq), kind: event.kind, payload: event.payload },
+      classId,
+      termId,
+    );
+  }
+  return world;
 }
 
 export async function replayTimeline(
   input: { termId: string; classId: string; from: string; to: string; mode: ReplayMode },
   db: Db = defaultDb,
 ) {
-  const frames = await db.execute<{ n: number }>(sql`
-    SELECT COUNT(*)::int AS n FROM event_log
-    WHERE replay_relevant
-      AND occurred_at >= ${input.from} AND occurred_at <= ${input.to}
-      AND (${input.classId}::uuid IS NULL OR class_id = ${input.classId} OR class_id IS NULL)
-  `);
-  const checkpoints = await db.execute<{ upto_event_seq: number; created_at: Date | string }>(sql`
-    SELECT upto_event_seq, created_at FROM replay_checkpoint
-    WHERE term_id = ${input.termId} AND class_id = ${input.classId}
-    ORDER BY upto_event_seq
-  `);
-  const density = await db.execute<{ at: Date | string; frames: number }>(sql`
-    SELECT date_trunc('day', occurred_at) AS at, COUNT(*)::int AS frames
-    FROM event_log
-    WHERE replay_relevant
-      AND occurred_at >= ${input.from} AND occurred_at <= ${input.to}
-      AND (class_id = ${input.classId} OR class_id IS NULL)
-    GROUP BY 1 ORDER BY 1
-  `);
+  const rangeStartSeq = await replayRepo.maxReplaySeqAt(db, {
+    termId: input.termId,
+    classId: input.classId,
+    at: input.from,
+    inclusive: false,
+  });
+  const world = await worldAtSeq(input.termId, input.classId, rangeStartSeq, db);
+  const [frameCount, checkpoints, density] = await Promise.all([
+    replayRepo.countReplayFrames(db, input),
+    replayRepo.listReplayCheckpoints(db, input.classId, input.termId),
+    replayRepo.listReplayDensity(db, input),
+  ]);
   return {
     mode: input.mode,
     from: input.from,
     to: input.to,
-    base_state: [],
-    frame_count: Number(frames[0]?.n ?? 0),
+    base_state: baseStateFromWorld(world, input.mode),
+    frame_count: frameCount,
     checkpoints: checkpoints.map((row) => ({
       upto_event_seq: Number(row.upto_event_seq),
-      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      created_at: iso(row.created_at),
     })),
     density: density.map((row) => ({
-      at: row.at instanceof Date ? row.at.toISOString() : String(row.at),
+      at: iso(row.at),
       frames: Number(row.frames),
     })),
   };
 }
 
 export async function replayFrames(
-  input: { termId: string; classId: string; from: string; to: string; mode: ReplayMode; cursor?: string; limit: number },
+  input: {
+    termId: string;
+    classId: string;
+    from: string;
+    to: string;
+    mode: ReplayMode;
+    cursor?: string;
+    limit: number;
+  },
   db: Db = defaultDb,
 ) {
   const cursor = input.cursor ? Number(input.cursor) : 0;
-  const rows = await db.execute<{
-    event_seq: number;
-    kind: string;
-    occurred_at: Date | string;
-    payload: unknown;
-  }>(sql`
-    SELECT event_seq, kind, occurred_at, payload FROM event_log
-    WHERE replay_relevant
-      AND event_seq > ${cursor}
-      AND occurred_at >= ${input.from} AND occurred_at <= ${input.to}
-      AND (class_id = ${input.classId} OR class_id IS NULL)
-    ORDER BY event_seq
-    LIMIT ${input.limit + 1}
-  `);
+  const rows = await replayRepo.listReplayFrameEvents(db, {
+    termId: input.termId,
+    classId: input.classId,
+    from: input.from,
+    to: input.to,
+    afterSeq: cursor,
+    limit: input.limit + 1,
+  });
   const hasMore = rows.length > input.limit;
   const page = hasMore ? rows.slice(0, input.limit) : rows;
+  if (page.length === 0) {
+    return { items: [], next_cursor: null };
+  }
+
+  const lastPageSeq = Number(page[page.length - 1]!.event_seq);
+  const pageSeqs = new Set(page.map((row) => Number(row.event_seq)));
+  const rangeStartSeq = await replayRepo.maxReplaySeqAt(db, {
+    termId: input.termId,
+    classId: input.classId,
+    at: input.from,
+    inclusive: false,
+  });
+  const checkpoint = await auditRepo.findNearestCheckpoint(
+    db,
+    input.classId,
+    input.termId,
+    rangeStartSeq,
+  );
+  const world = checkpoint ? worldFromCheckpoint(checkpoint.state) : emptyWorld();
+  const afterSeq = checkpoint ? Number(checkpoint.upto_event_seq) : 0;
+  const events = await replayRepo.listReplayEventsBetween(db, {
+    termId: input.termId,
+    classId: input.classId,
+    afterSeq,
+    uptoSeq: lastPageSeq,
+  });
+  const identities = identityMap(await replayRepo.listReplayIdentities(db, input.classId));
+
+  let rangeStartBalances = new Map<string, number>();
+  let capturedRangeStart = rangeStartSeq <= afterSeq;
+  if (capturedRangeStart) rangeStartBalances = snapshotBalances(world);
+
   const items = [];
-  for (const row of page) {
+  for (const event of events) {
+    const eventSeq = Number(event.event_seq);
+    if (!capturedRangeStart && eventSeq > rangeStartSeq) {
+      rangeStartBalances = snapshotBalances(world);
+      capturedRangeStart = true;
+    }
+    applyReplayEvent(
+      world,
+      { event_seq: eventSeq, kind: event.kind, payload: event.payload },
+      input.classId,
+      input.termId,
+    );
+    if (!pageSeqs.has(eventSeq)) continue;
     items.push({
-      event_seq: Number(row.event_seq),
-      kind: row.kind,
-      occurred_at: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : String(row.occurred_at),
+      event_seq: eventSeq,
+      kind: event.kind,
+      occurred_at: iso(event.occurred_at),
       mode: input.mode,
-      top10: await rankingAt(input.termId, input.classId, Number(row.event_seq), db),
+      top10: rankingFromWorld(
+        world,
+        identities,
+        input.mode,
+        rangeStartSeq,
+        rangeStartBalances,
+      ),
     });
   }
+
   const last = page[page.length - 1];
   return {
     items,
@@ -95,47 +202,63 @@ export async function replayStateAt(
   input: { termId: string; classId: string; at: string; mode: ReplayMode },
   db: Db = defaultDb,
 ) {
-  const seq = await db.execute<{ event_seq: number }>(sql`
-    SELECT COALESCE(MAX(event_seq), 0)::bigint AS event_seq FROM event_log
-    WHERE replay_relevant AND occurred_at <= ${input.at}
-      AND (class_id = ${input.classId} OR class_id IS NULL)
-  `);
+  const uptoSeq = await replayRepo.maxReplaySeqAt(db, {
+    termId: input.termId,
+    classId: input.classId,
+    at: input.at,
+    inclusive: true,
+  });
+  const rangeStartSeq = 0;
+  const world = await worldAtSeq(input.termId, input.classId, uptoSeq, db);
+  const identities = identityMap(await replayRepo.listReplayIdentities(db, input.classId));
   return {
     at: input.at,
     mode: input.mode,
-    ranking: await rankingAt(input.termId, input.classId, Number(seq[0]?.event_seq ?? 0), db),
+    ranking: rankingFromWorld(world, identities, input.mode, rangeStartSeq, new Map()),
   };
 }
 
-async function rankingAt(termId: string, classId: string, uptoSeq: number, db: Db) {
-  const rows = await db.execute<{
-    student_id: string;
-    name: string;
-    student_no: string;
-    class_id: string;
-    class_name: string;
-    balance: number;
-    last_change_seq: number;
-  }>(sql`
-    SELECT st.student_id, st.name, st.student_no, st.class_id, c.name AS class_name,
-           COALESCE(SUM(pe.delta), 0)::int AS balance,
-           COALESCE(MAX(pe.seq), 0)::bigint AS last_change_seq
-    FROM point_entry pe
-    JOIN student st ON st.student_id = pe.student_id
-    JOIN class c ON c.class_id = st.class_id
-    WHERE pe.term_id = ${termId}
-      AND pe.class_id_snapshot = ${classId}
-      AND pe.seq <= ${uptoSeq}
-      AND st.status = 'active'
-    GROUP BY st.student_id, st.name, st.student_no, st.class_id, c.name
-    ORDER BY balance DESC, last_change_seq ASC, c.name, st.student_no
-    LIMIT 10
-  `);
-  return assignRanks(
-    rows.map((row) => ({
-      ...row,
-      balance: Number(row.balance),
-      last_change_seq: Number(row.last_change_seq),
-    })),
+/**
+ * 按班、当前学期写入到期检查点。由 `scripts/checkpoint.ts` 调用，不在记分事务里调用。
+ */
+export async function writeDueCheckpoints(
+  input: { daily: boolean },
+  db: Db = defaultDb,
+): Promise<{ written: number; skipped: number }> {
+  const term = await classRepo.currentTerm(db);
+  if (!term) return { written: 0, skipped: 0 };
+
+  const threshold = configNumber(
+    await auditRepo.getJobConfig(db, 'replay_checkpoint_event_threshold', CHECKPOINT_EVENT_THRESHOLD),
+    CHECKPOINT_EVENT_THRESHOLD,
   );
+  const classes = await classRepo.listClasses(db, true);
+  let written = 0;
+  let skipped = 0;
+
+  for (const cls of classes) {
+    const latest = await auditRepo.latestCheckpoint(db, cls.class_id, term.term_id);
+    const sinceSeq = latest ? Number(latest.upto_event_seq) : 0;
+    const eventsSinceLast = await auditRepo.countReplayEventsSince(db, cls.class_id, sinceSeq);
+    if (!shouldWriteCheckpoint(eventsSinceLast, input.daily, threshold)) {
+      skipped += 1;
+      continue;
+    }
+    const uptoSeq = await replayRepo.maxReplaySeqForClass(db, cls.class_id, term.term_id);
+    if (uptoSeq <= 0 || uptoSeq === sinceSeq) {
+      skipped += 1;
+      continue;
+    }
+    const world = await worldAtSeq(term.term_id, cls.class_id, uptoSeq, db);
+    await auditRepo.insertCheckpoint(db, {
+      class_id: cls.class_id,
+      term_id: term.term_id,
+      upto_event_seq: uptoSeq,
+      state: snapshotWorld(world),
+      trigger_reason: input.daily && eventsSinceLast < threshold ? 'daily' : 'event_threshold',
+    });
+    written += 1;
+  }
+
+  return { written, skipped };
 }

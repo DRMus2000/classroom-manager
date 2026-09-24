@@ -45,6 +45,7 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
     const first = await runMigrate(connectionString);
     assert.match(first, /001_phase1_core\.sql/);
     assert.match(first, /002_phase2_duty_marks\.sql/);
+    assert.match(first, /003_term_open_return_new\.sql/);
 
     const second = await runMigrate(connectionString);
     assert.match(second, /没有待执行的迁移/);
@@ -63,6 +64,7 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
     const third = await runMigrate(connectionString);
     assert.match(third, /001_phase1_core\.sql/);
     assert.match(third, /002_phase2_duty_marks\.sql/);
+    assert.match(third, /003_term_open_return_new\.sql/);
 
     const check = new pg.Client({ connectionString });
     await check.connect();
@@ -182,7 +184,52 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
       );
       assert.deepEqual(
         applied.rows.map((row) => row.filename),
-        ['001_phase1_core.sql', '002_phase2_duty_marks.sql'],
+        ['001_phase1_core.sql', '002_phase2_duty_marks.sql', '003_term_open_return_new.sql'],
+      );
+
+      const cls = await check.query<{ class_id: string }>(
+        `INSERT INTO class (name) VALUES ('触发器班') RETURNING class_id`,
+      );
+      const term = await check.query<{ term_id: string }>(
+        `INSERT INTO term (name, status, is_current) VALUES ('开放学期', 'open', true) RETURNING term_id`,
+      );
+      const student = await check.query<{ student_id: string }>(
+        `INSERT INTO student (class_id, student_no, name) VALUES ($1, '1', '甲') RETURNING student_id`,
+        [cls.rows[0]!.class_id],
+      );
+      const batch = await check.query<{ batch_id: string }>(
+        `INSERT INTO point_batch (term_id, class_id, delta_value, member_count, kind, request_id)
+         VALUES ($1, $2, 1, 1, 'score', '8f2c0000-0000-4000-8000-0000000000a1')
+         RETURNING batch_id`,
+        [term.rows[0]!.term_id, cls.rows[0]!.class_id],
+      );
+      const entry = await check.query<{ entry_id: string }>(
+        `INSERT INTO point_entry
+           (batch_id, student_id, term_id, class_id_snapshot, delta, balance_after, occurred_at)
+         VALUES ($1, $2, $3, $4, 1, 1, now())
+         RETURNING entry_id`,
+        [batch.rows[0]!.batch_id, student.rows[0]!.student_id, term.rows[0]!.term_id, cls.rows[0]!.class_id],
+      );
+      assert.equal(entry.rowCount, 1);
+      const kept = await check.query(
+        `SELECT entry_id FROM point_entry WHERE entry_id = $1`,
+        [entry.rows[0]!.entry_id],
+      );
+      assert.equal(kept.rowCount, 1);
+
+      await check.query(
+        `UPDATE term SET status = 'closed', is_current = false, closed_at = now() WHERE term_id = $1`,
+        [term.rows[0]!.term_id],
+      );
+      await assert.rejects(
+        () =>
+          check.query(
+            `INSERT INTO point_entry
+               (batch_id, student_id, term_id, class_id_snapshot, delta, balance_after, occurred_at)
+             VALUES ($1, $2, $3, $4, 1, 2, now())`,
+            [batch.rows[0]!.batch_id, student.rows[0]!.student_id, term.rows[0]!.term_id, cls.rows[0]!.class_id],
+          ),
+        /term_readonly/,
       );
     } finally {
       await check.end();

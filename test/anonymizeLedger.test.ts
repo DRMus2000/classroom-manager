@@ -122,6 +122,37 @@ describe('anon ledger file', () => {
       /处理版本/,
     );
   });
+
+  it('没有持有者的锁立即回收，活着的锁在过期前不拆', async () => {
+    process.env.DATABASE_URL ??= 'postgres://unused:unused@127.0.0.1:1/unused';
+    const { shouldStealLedgerLock, LOCK_STALE_MS } = await import('../src/services/anonLedger.js');
+    assert.equal(shouldStealLedgerLock({ ownerAlive: false, ageMs: 0 }), true);
+    assert.equal(shouldStealLedgerLock({ ownerAlive: true, ageMs: 5_000 }), false);
+    assert.equal(shouldStealLedgerLock({ ownerAlive: true, ageMs: LOCK_STALE_MS }), false);
+    assert.equal(shouldStealLedgerLock({ ownerAlive: true, ageMs: LOCK_STALE_MS + 1 }), true);
+    assert.ok(LOCK_STALE_MS > 5_000);
+
+    const lockDir = await mkdtemp(path.join(tmpdir(), 'anon-ledger-lock-'));
+    process.env['ANON_LEDGER_PATH'] = path.join(lockDir, 'ledger.jsonl.enc');
+    process.env['ANON_LEDGER_KEY'] = KEY;
+    const { writeFile } = await import('node:fs/promises');
+    try {
+      await writeFile(`${process.env['ANON_LEDGER_PATH']}.lock`, '2147483647', 'utf8');
+      const ledger = await import('../src/services/anonLedger.js');
+      const started = Date.now();
+      const id = await ledger.appendAnonLedgerEntry({
+        student_id: STUDENT_ID,
+        class_id: CLASS_ID,
+        anon_code: '匿名-锁',
+        processed_at: '2026-09-24T00:00:10.000Z',
+        process_version: 3,
+      });
+      assert.ok(id);
+      assert.ok(Date.now() - started < 2_000);
+    } finally {
+      await rm(lockDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('anonymize routes', () => {

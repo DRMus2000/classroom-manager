@@ -12,6 +12,7 @@ import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import {
   drawStudents,
+  parseStoredIdList,
   rollcallPool,
   uniqueIds,
   unknownStudentIds,
@@ -42,20 +43,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function asStringArray(value: unknown): string[] {
-  const list = Array.isArray(value)
-    ? value
-    : typeof value === 'string'
-      ? (JSON.parse(value) as unknown)
-      : [];
-  if (!Array.isArray(list)) return [];
-  return list.filter((item): item is string => typeof item === 'string');
+export function readStoredIdList(value: unknown): string[] {
+  const list = parseStoredIdList(value);
+  if (list == null) {
+    console.error('点名名单不是合法 JSON');
+    throw Errors.internal('点名名单无法解析');
+  }
+  return list;
 }
 
 function readScope(value: unknown): RollcallScope {
   const record = asRecord(value);
   const type = record?.type === 'selected' ? 'selected' : 'all';
-  return { type, student_ids: asStringArray(record?.student_ids) };
+  return { type, student_ids: readStoredIdList(record?.student_ids) };
 }
 
 function toPool(rows: rollcallRepo.ClassStudentRow[]): PoolStudent[] {
@@ -86,8 +86,8 @@ async function viewOf(db: Db, row: rollcallRepo.RollcallRow): Promise<RollcallVi
     class_id: row.class_id,
     status: row.status,
     scope: readScope(row.scope_desc),
-    exclude_student_ids: asStringArray(row.exclude_list),
-    picked: present(students, asStringArray(row.picked_ids)),
+    exclude_student_ids: readStoredIdList(row.exclude_list),
+    picked: present(students, readStoredIdList(row.picked_ids)),
   };
 }
 
@@ -197,8 +197,8 @@ export async function draw(
       if (row.status !== 'open') throw Errors.forbidden('点名已结束，请开启新一轮');
       const students = toPool(await rollcallRepo.listClassStudents(tx, row.class_id));
       const scope = readScope(row.scope_desc);
-      const excludeIds = asStringArray(row.exclude_list);
-      const pickedIds = asStringArray(row.picked_ids);
+      const excludeIds = readStoredIdList(row.exclude_list);
+      const pickedIds = readStoredIdList(row.picked_ids);
       const pool = rollcallPool(students, scope, excludeIds, pickedIds);
       const drawn = drawStudents(pool, count, random);
       if (!drawn.ok) {
@@ -236,8 +236,8 @@ export async function exclude(
       if (row.status !== 'open') throw Errors.forbidden('点名已结束，不能再排除');
       const students = toPool(await rollcallRepo.listClassStudents(tx, row.class_id));
       assertKnown(students, incoming);
-      const excludeIds = uniqueIds([...asStringArray(row.exclude_list), ...incoming]);
-      const pickedIds = asStringArray(row.picked_ids);
+      const excludeIds = uniqueIds([...readStoredIdList(row.exclude_list), ...incoming]);
+      const pickedIds = readStoredIdList(row.picked_ids);
       await rollcallRepo.saveRoundLists(tx, rollcallId, excludeIds, pickedIds);
       const view = await viewOf(tx, { ...row, exclude_list: excludeIds, picked_ids: pickedIds });
       await publish(tx, view, 'exclude', actorId, requestId);

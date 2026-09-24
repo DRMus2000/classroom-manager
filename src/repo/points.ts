@@ -486,17 +486,20 @@ export async function listRanked(
     balance: number;
     last_change_seq: number;
   }>(
-    sql`SELECT st.student_id,
+        sql`SELECT st.student_id,
                COALESCE(NULLIF(st.name, ''), st.anon_code, '') AS student_name,
                st.student_no, st.class_id, c.name AS class_name,
-               pb.balance, pb.last_change_seq
-        FROM point_balance pb
-        JOIN student st ON st.student_id = pb.student_id
+               COALESCE(pb.balance, 0)::int AS balance,
+               COALESCE(pb.last_change_seq, 0)::bigint AS last_change_seq
+        FROM student st
         JOIN class c ON c.class_id = st.class_id
-        WHERE pb.term_id = ${termId}
-          AND st.status = 'active'
+        LEFT JOIN point_balance pb
+          ON pb.student_id = st.student_id AND pb.term_id = ${termId}
+        WHERE st.status = 'active'
           ${filter}
-        ORDER BY pb.balance DESC, pb.last_change_seq ASC, c.name, st.student_no`,
+        ORDER BY COALESCE(pb.balance, 0) DESC,
+                 COALESCE(pb.last_change_seq, 0) ASC,
+                 c.name, st.student_no`,
   );
   return rows;
 }

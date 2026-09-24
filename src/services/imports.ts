@@ -555,6 +555,7 @@ export async function commitImport(
     let created = 0;
     let updated = 0;
     let kept = 0;
+    const createdStudentIds: string[] = [];
 
     const slots = await layoutRepo.listSlots(tx);
     const slotByNumber = new Map(
@@ -585,6 +586,8 @@ export async function commitImport(
           remark: null,
         });
         await studentRepo.assignSeat(tx, classId, seat.seat_id, s.student_id, term.term_id);
+        await classRepo.ensureBalanceRow(tx, term.term_id, s.student_id);
+        createdStudentIds.push(s.student_id);
         created++;
       } else if (c.kind === 'update' && c.student_id) {
         await studentRepo.updateStudent(tx, c.student_id, { name: c.name });
@@ -618,7 +621,14 @@ export async function commitImport(
     await auditRepo.writeEvent(tx, {
       class_id: classId,
       kind: 'roster_changed',
-      payload: { class_id: classId, action: 'import_committed', created, updated, kept },
+      payload: {
+        class_id: classId,
+        action: 'import_committed',
+        created,
+        updated,
+        kept,
+        created_student_ids: createdStudentIds,
+      },
     });
 
         return {

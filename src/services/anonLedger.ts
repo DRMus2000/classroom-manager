@@ -132,13 +132,61 @@ function validateLedgerInput(input: NewAnonLedgerEntry): void {
   }
 }
 
+const LOCK_WAIT_MS = 5_000;
+/** 视为过期的时间必须长于一次正常加密写入，避免把仍在使用的锁拆掉。 */
+export const LOCK_STALE_MS = 30_000;
+
+export function shouldStealLedgerLock(input: {
+  ownerAlive: boolean;
+  ageMs: number;
+  staleMs?: number;
+}): boolean {
+  if (!input.ownerAlive) return true;
+  return input.ageMs > (input.staleMs ?? LOCK_STALE_MS);
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    return true;
+  }
+}
+
+async function readLockPid(lockPath: string): Promise<number | null> {
+  try {
+    const raw = (await readFile(lockPath, 'utf8')).trim();
+    const pid = Number(raw);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+async function stealLockIfSafe(lockPath: string): Promise<void> {
+  const info = await stat(lockPath).catch(() => null);
+  if (!info) return;
+  const pid = await readLockPid(lockPath);
+  const ownerAlive = pid != null && pidAlive(pid);
+  if (
+    !shouldStealLedgerLock({
+      ownerAlive,
+      ageMs: Date.now() - info.mtimeMs,
+    })
+  ) {
+    return;
+  }
+  await rm(lockPath, { force: true });
+}
+
 async function withLedgerLock<T>(fn: () => Promise<T>): Promise<T> {
   const lockPath = `${ledgerPath()}.lock`;
   await mkdir(dirname(lockPath), { recursive: true });
-  const stale = await stat(lockPath).catch(() => null);
-  if (stale && Date.now() - stale.mtimeMs > 5_000) {
-    await rm(lockPath, { force: true });
-  }
+  await stealLockIfSafe(lockPath);
   const started = Date.now();
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   while (!handle) {
@@ -146,11 +194,13 @@ async function withLedgerLock<T>(fn: () => Promise<T>): Promise<T> {
       handle = await open(lockPath, 'wx');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      if (Date.now() - started > 5_000) throw new Error('匿名账本锁等待超时');
+      await stealLockIfSafe(lockPath);
+      if (Date.now() - started > LOCK_WAIT_MS) throw new Error('匿名账本锁等待超时');
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
   try {
+    await handle.writeFile(String(process.pid), 'utf8');
     return await fn();
   } finally {
     await handle.close();

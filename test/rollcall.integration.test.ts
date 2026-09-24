@@ -208,9 +208,29 @@ describe('rollcall and countdown', { timeout: 180_000 }, () => {
         now + 25_000,
       );
       assert.equal(resumed.status, 'running');
+      const beforeFinish = await client.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM event_log WHERE class_id = $1 AND kind = 'countdown_changed'`,
+        [classId],
+      );
       const finished = await countdown.getCountdown(classId, undefined, now + 25_000 + 40_000);
       assert.equal(finished.status, 'finished');
       assert.equal(finished.remaining_sec, 0);
+      const afterFinish = await client.query<{ n: number; status: string }>(
+        `SELECT COUNT(*)::int AS n,
+                (SELECT payload->>'status' FROM event_log
+                 WHERE class_id = $1 AND kind = 'countdown_changed'
+                 ORDER BY event_seq DESC LIMIT 1) AS status
+         FROM event_log WHERE class_id = $1 AND kind = 'countdown_changed'`,
+        [classId],
+      );
+      assert.equal(Number(afterFinish.rows[0]!.n), Number(beforeFinish.rows[0]!.n) + 1);
+      assert.equal(afterFinish.rows[0]!.status, 'finished');
+      await countdown.getCountdown(classId, undefined, now + 25_000 + 40_000);
+      const reread = await client.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM event_log WHERE class_id = $1 AND kind = 'countdown_changed'`,
+        [classId],
+      );
+      assert.equal(Number(reread.rows[0]!.n), Number(afterFinish.rows[0]!.n));
 
       const events = await client.query<{ kind: string }>(
         `SELECT kind FROM event_log WHERE class_id = $1 ORDER BY event_seq`,

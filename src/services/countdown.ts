@@ -87,6 +87,18 @@ export async function getCountdown(classId: string, db: Db = defaultDb, nowMs = 
         remaining_sec: 0,
         updated_by: locked.updated_by,
       });
+      await auditRepo.writeEvent(tx, {
+        class_id: classId,
+        kind: 'countdown_changed',
+        payload: {
+          class_id: classId,
+          action: 'finish',
+          status: 'finished',
+          duration_sec: again.duration_sec,
+          deadline_at: again.deadline_ms == null ? null : new Date(again.deadline_ms).toISOString(),
+          remaining_sec: 0,
+        },
+      });
     });
   }
   return toView(classId, settled, toIso(row.updated_at), nowMs);

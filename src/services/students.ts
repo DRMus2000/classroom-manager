@@ -147,6 +147,7 @@ export async function createStudent(
     });
 
     await studentRepo.assignSeat(tx, classId, input.seat_id, created.student_id, term.term_id);
+    await classRepo.ensureBalanceRow(tx, term.term_id, created.student_id);
     await classRepo.bumpSeatVersion(tx, classId);
 
     await auditRepo.writeAudit(tx, {
@@ -330,6 +331,7 @@ export async function restoreStudent(
       studentId,
       term.term_id,
     );
+    await classRepo.ensureBalanceRow(tx, term.term_id, studentId);
     await classRepo.bumpSeatVersion(tx, student.class_id);
 
     await auditRepo.writeAudit(tx, {
