@@ -581,9 +581,9 @@ export async function confirmSelection(
 ) {
   return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/confirm`, { request_id: requestId, expected_version: expectedVersion }, async (tx) => {
     const selection = await loadSelection(tx, selectionId);
+    if (selection.status === 'confirmed') return selection;
     const round = await lockRound(tx, selection.round_id);
     assertVersion(round, expectedVersion);
-    if (selection.status === 'confirmed') return selection;
     if (selection.status !== 'pending') throw Errors.forbidden('只有待确认抽选可以确认');
     for (const item of selection.picked) {
       await tx.execute(
