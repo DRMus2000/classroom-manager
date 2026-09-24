@@ -23,6 +23,7 @@ import * as pointsService from './services/points.js';
 import * as markService from './services/marks.js';
 import * as auditService from './services/audit.js';
 import * as dutyService from './services/duty.js';
+import * as replayService from './services/replay.js';
 import * as importService from './services/imports.js';
 import {
   MAX_IMPORT_BYTES,
@@ -67,6 +68,7 @@ import {
   overrideTemplateInput,
   planSeatsInput,
   previewLayoutChangeInput,
+  replayMode,
   restoreStudentInput,
   reverseBatchInput,
   reverseEntryInput,
@@ -526,6 +528,68 @@ export async function buildServer() {
       params.template_id,
       body.request_id,
     );
+  });
+
+  app.get('/api/v1/replay/timeline', async (request) => {
+    await requireUser(request);
+    const query = parse<{ term_id: string; class_id: string; from: string; to: string; mode: 'cumulative' | 'net' }>(
+      z.object({ term_id: uuid, class_id: uuid, from: z.string(), to: z.string(), mode: replayMode.default('cumulative') }),
+      request.query,
+    );
+    return replayService.replayTimeline({
+      termId: query.term_id,
+      classId: query.class_id,
+      from: query.from,
+      to: query.to,
+      mode: query.mode,
+    });
+  });
+
+  app.get('/api/v1/replay/frames', async (request) => {
+    await requireUser(request);
+    const query = parse<{
+      term_id: string;
+      class_id: string;
+      from: string;
+      to: string;
+      mode: 'cumulative' | 'net';
+      cursor?: string;
+      limit: number;
+    }>(
+      z.object({
+        term_id: uuid,
+        class_id: uuid,
+        from: z.string(),
+        to: z.string(),
+        mode: replayMode.default('cumulative'),
+        cursor: z.string().regex(/^[1-9]\d{0,18}$/).optional(),
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+      }),
+      request.query,
+    );
+    return replayService.replayFrames({
+      termId: query.term_id,
+      classId: query.class_id,
+      from: query.from,
+      to: query.to,
+      mode: query.mode,
+      cursor: query.cursor,
+      limit: query.limit,
+    });
+  });
+
+  app.get('/api/v1/replay/state-at', async (request) => {
+    await requireUser(request);
+    const query = parse<{ term_id: string; class_id: string; at: string; mode: 'cumulative' | 'net' }>(
+      z.object({ term_id: uuid, class_id: uuid, at: z.string(), mode: replayMode.default('cumulative') }),
+      request.query,
+    );
+    return replayService.replayStateAt({
+      termId: query.term_id,
+      classId: query.class_id,
+      at: query.at,
+      mode: query.mode,
+    });
   });
 
   app.get('/api/v1/leaderboard', async (request) => {
