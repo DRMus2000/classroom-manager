@@ -12,6 +12,7 @@ import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
 import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
+import { toIsoTimestamp } from '../lib/time.js';
 import type {
   ClassDto,
   TermDto,
@@ -23,7 +24,7 @@ import type {
 
 /** `db.execute` 把 timestamptz 返回成字符串，行类型上的 Date 并不可靠。 */
 function iso(value: Date | string): string {
-  return (value instanceof Date ? value : new Date(value)).toISOString();
+  return toIsoTimestamp(value);
 }
 
 function isoOrNull(value: Date | string | null | undefined): string | null {

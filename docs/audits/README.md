@@ -8,5 +8,6 @@
 | [002](002-batch-598969b-1ab08a1.md) | 2026-09-24 | `598969b` 至 `1ab08a1`：登录锁定、卫生轮次、排行榜 | CHANGES REQUESTED |
 | [003](003-batch-8217f82-710aef7.md) | 2026-09-24 | `8217f82`、`710aef7`：卫生返工与回放读取 | CHANGES REQUESTED |
 | [004](004-batch-b6929d3-501e10f.md) | 2026-09-25 | `b6929d3`、`501e10f`：点名、倒计时、导出 | CHANGES REQUESTED |
+| [005](005-batch-8029b58-3ac5fda.md) | 2026-09-25 | `8029b58`、`3ac5fda`：时间与 ANY()、前端页面 | CHANGES REQUESTED |
 
-下一编号：005
+下一编号：006

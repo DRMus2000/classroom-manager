@@ -145,7 +145,6 @@ export function ClassroomPage() {
       student_ids: [...ids],
       delta: intent.delta,
       template_id: intent.template?.template_id ?? null,
-      note: intent.note ?? null,
     };
     const result = await write.run(body, (requestId) =>
       api<BatchResultDto>('/points/batches', { method: 'POST', body, requestId }),

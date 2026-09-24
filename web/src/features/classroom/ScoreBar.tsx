@@ -6,7 +6,6 @@ import { Icon } from '../../components/Icon';
 export interface ScoreIntent {
   delta: number;
   template: EffectiveTemplateDto | null;
-  note?: string | null;
 }
 
 const QUICK = [1, 2, -1, -2];

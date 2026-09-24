@@ -16,6 +16,7 @@ import * as auditRepo from '../repo/audit.js';
 import { idempotentTx } from './idempotency.js';
 import { assignRanks, canReverseBatch, canReverseEntry, validateDeltaPolarity } from '../domain/points.js';
 import { AppError, Errors } from '../lib/errors.js';
+import { toIsoTimestamp } from '../lib/time.js';
 import type {
   CreateBatchInput,
   BatchResultDto,
@@ -563,8 +564,7 @@ export async function listTimeline(
   return {
     items: grouped.map((row) => ({
       batch_id: row.batch_id,
-      occurred_at:
-        row.occurred_at instanceof Date ? row.occurred_at.toISOString() : new Date(row.occurred_at).toISOString(),
+      occurred_at: toIsoTimestamp(row.occurred_at),
       delta_value: row.delta_value,
       member_count: row.member_count,
       kind: row.kind,

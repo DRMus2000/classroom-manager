@@ -293,9 +293,27 @@ export async function markNoPush(
       if (!rows[0]) throw Errors.notFound('轮次成员', studentId);
       if (rows[0].no_push) throw Errors.noPushAlreadyMarked();
       await tx.execute(
-        sql`UPDATE duty_round_member SET no_push = true
+        sql`UPDATE duty_round_member
+            SET no_push = true, eligible_for_backfill = false
             WHERE round_id = ${roundId} AND student_id = ${studentId}`,
       );
+      if (round.frozen_at) {
+        await tx.execute(
+          sql`UPDATE duty_candidate
+              SET invalidated_at = now()
+              WHERE round_id = ${roundId} AND student_id = ${studentId} AND invalidated_at IS NULL`,
+        );
+        await tx.execute(
+          sql`UPDATE duty_selection s
+              SET status = 'invalidated', resolution_note = 'no_push', resolved_at = now()
+              WHERE s.round_id = ${roundId}
+                AND s.status IN ('pending', 'cancelled')
+                AND EXISTS (
+                  SELECT 1 FROM duty_selection_item i
+                  WHERE i.selection_id = s.selection_id AND i.picked_student_id = ${studentId}
+                )`,
+        );
+      }
     }
     const version = await bump(tx, roundId);
     await broadcast(tx, round.class_id, roundId, 'no_push', requestId);

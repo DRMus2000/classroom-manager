@@ -18,6 +18,7 @@ import {
   type ReplayWorld,
 } from '../domain/replay.js';
 import type { ReplayMode } from '../lib/schema.js';
+import { toIsoTimestamp } from '../lib/time.js';
 
 export const CHECKPOINT_EVENT_THRESHOLD = 200;
 
@@ -32,7 +33,7 @@ export function shouldWriteCheckpoint(
 }
 
 function iso(value: Date | string): string {
-  return value instanceof Date ? value.toISOString() : String(value);
+  return toIsoTimestamp(value);
 }
 
 function identityMap(rows: ReplayIdentity[]): Map<string, ReplayIdentity> {

@@ -486,7 +486,6 @@ export const createBatchInput = z.object({
   student_ids: z.array(uuid).min(1).max(200),
   delta: z.number().int().refine((v) => v !== 0, '加减分必须是非零整数'),
   template_id: uuid.nullable().default(null),
-  note: z.string().max(500).nullable().default(null),
 });
 export type CreateBatchInput = z.infer<typeof createBatchInput>;
 

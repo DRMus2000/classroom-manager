@@ -152,6 +152,42 @@ describe('duty rounds', { timeout: 180_000 }, () => {
           return true;
         },
       );
+
+      const otherClass = await client.query<{ class_id: string }>(
+        `INSERT INTO class (name) VALUES ('未推椅子班') RETURNING class_id`,
+      );
+      const otherId = otherClass.rows[0]!.class_id;
+      const pushed = await client.query<{ student_id: string }>(
+        `INSERT INTO student (class_id, student_no, name) VALUES ($1, '1', '未推') RETURNING student_id`,
+        [otherId],
+      );
+      const otherLine = await client.query<{ line_id: string }>(
+        `INSERT INTO duty_line (class_id) VALUES ($1) RETURNING line_id`,
+        [otherId],
+      );
+      await client.query(
+        `INSERT INTO duty_term (line_id, student_id, seq_no, completed_count, required_count, started_round_id)
+         VALUES ($1, $2, 1, 0, 3, '8f2c0000-0000-4000-8000-00000000008a')`,
+        [otherLine.rows[0]!.line_id, pushed.rows[0]!.student_id],
+      );
+      const nopushRound = await duty.startRound(actor, otherId, '8f2c0000-0000-4000-8000-00000000008b');
+      const marked = await duty.markNoPush(
+        actor,
+        nopushRound.round_id,
+        [pushed.rows[0]!.student_id],
+        nopushRound.version,
+        '8f2c0000-0000-4000-8000-00000000008c',
+      );
+      const frozenAfter = await duty.freezeCandidates(
+        actor,
+        nopushRound.round_id,
+        marked.version,
+        '8f2c0000-0000-4000-8000-00000000008d',
+      );
+      assert.equal(
+        frozenAfter.candidates.some((row) => row.student_id === pushed.rows[0]!.student_id),
+        false,
+      );
     } finally {
       await client.end();
     }

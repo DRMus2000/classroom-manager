@@ -23,7 +23,6 @@ export function ScoreDialog(props: {
   const [template, setTemplate] = useState<EffectiveTemplateDto | null>(null);
   const [sign, setSign] = useState<1 | -1>(1);
   const [amount, setAmount] = useState('1');
-  const [note, setNote] = useState('');
 
   useEffect(() => {
     if (!props.open) return;
@@ -31,7 +30,6 @@ export function ScoreDialog(props: {
     setTemplate(p?.template ?? null);
     setSign(p ? (p.delta < 0 ? -1 : 1) : 1);
     setAmount(String(p ? Math.abs(p.delta) : 1));
-    setNote('');
   }, [props.open, props.preset]);
 
   const magnitude = Number(amount);
@@ -64,7 +62,7 @@ export function ScoreDialog(props: {
             type="button"
             className={`btn ${delta < 0 ? 'btn-danger' : 'btn-primary'}`}
             disabled={!valid || props.disabled || props.pending}
-            onClick={() => props.onSubmit({ delta, template, note: note.trim() || null })}
+            onClick={() => props.onSubmit({ delta, template })}
           >
             {props.pending ? '提交中…' : `${props.count > 1 ? `${props.count} 人` : ''} ${valid ? signed(delta) : ''} 确认`}
           </button>
@@ -127,10 +125,6 @@ export function ScoreDialog(props: {
         {!valid ? <small className="form-error">请输入 1–1000 的整数</small> : null}
       </div>
 
-      <label className="field">
-        <span>备注（可选）</span>
-        <textarea rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如补录缘由" />
-      </label>
     </Modal>
   );
 }

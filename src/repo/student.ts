@@ -316,7 +316,7 @@ export async function applySeatAssignments(
   if (studentIds.length > 0) {
     await db.execute(
       sql`DELETE FROM seat_assignment
-          WHERE class_id = ${classId} AND student_id = ANY(${sql.param(studentIds)})`,
+          WHERE class_id = ${classId} AND student_id = ANY(${sql.param(studentIds)}::uuid[])`,
     );
   }
 
@@ -401,7 +401,7 @@ export async function listStudentMarks(
 ): Promise<Map<string, string[]>> {
   if (studentIds.length === 0) return new Map();
   const rows = await db.execute<{ student_id: string; mark_id: string }>(
-    sql`SELECT student_id, mark_id FROM student_mark WHERE student_id = ANY(${sql.param(studentIds)})`,
+    sql`SELECT student_id, mark_id FROM student_mark WHERE student_id = ANY(${sql.param(studentIds)}::uuid[])`,
   );
   const map = new Map<string, string[]>();
   for (const r of rows) {
