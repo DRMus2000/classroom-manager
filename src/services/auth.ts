@@ -100,8 +100,9 @@ export async function changePassword(
   input: ChangePasswordInput,
   db: Db = defaultDb,
   meta: { ip?: string; user_agent?: string } = {},
-): Promise<{ token: string }> {
-  return idempotentTx(db, input.request_id, 'POST /api/v1/auth/password', input, async (tx) => {
+): Promise<{ ok: true; token?: string }> {
+  let token: string | undefined;
+  await idempotentTx(db, input.request_id, 'POST /api/v1/auth/password', input, async (tx) => {
     const tokenVersion = await authRepo.changePassword(
       tx,
       teacherId,
@@ -126,8 +127,10 @@ export async function changePassword(
       action: 'change_password',
       request_id: input.request_id,
     });
-    return { token: created.token };
+    token = created.token;
+    return { ok: true as const };
   });
+  return { ok: true, token };
 }
 
 /** 退出其他设备（保留当前会话）。 */

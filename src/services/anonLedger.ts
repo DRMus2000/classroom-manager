@@ -15,7 +15,7 @@
  * 挂载在独立卷上，与 backups 卷分开，绝不随数据库恢复被覆盖。
  */
 
-import { readFile, writeFile, rename, mkdir, rm, open } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir, rm, open, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { encryptAnonLedger, decryptAnonLedger } from '../lib/crypto.js';
@@ -135,6 +135,10 @@ function validateLedgerInput(input: NewAnonLedgerEntry): void {
 async function withLedgerLock<T>(fn: () => Promise<T>): Promise<T> {
   const lockPath = `${ledgerPath()}.lock`;
   await mkdir(dirname(lockPath), { recursive: true });
+  const stale = await stat(lockPath).catch(() => null);
+  if (stale && Date.now() - stale.mtimeMs > 5_000) {
+    await rm(lockPath, { force: true });
+  }
   const started = Date.now();
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   while (!handle) {

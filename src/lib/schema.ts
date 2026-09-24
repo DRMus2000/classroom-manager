@@ -706,9 +706,7 @@ export const dutySelectionInput = dutyVersionInput.extend({
   student_id: uuid,
 });
 
-export const dutyFreezeInput = z.object({
-  request_id: requestId,
-});
+export const dutyFreezeInput = dutyVersionInput;
 
 export const dutyCorrectInput = dutyVersionInput.extend({
   action: z.enum(['release', 'restore', 'adjust_count']),

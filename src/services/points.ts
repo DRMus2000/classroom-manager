@@ -14,7 +14,7 @@ import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
 import { idempotentTx } from './idempotency.js';
-import { assignRanks, canReverseBatch, canReverseEntry, compareRank, validateDeltaPolarity } from '../domain/points.js';
+import { assignRanks, canReverseBatch, canReverseEntry, validateDeltaPolarity } from '../domain/points.js';
 import { AppError, Errors } from '../lib/errors.js';
 import type {
   CreateBatchInput,
@@ -613,32 +613,19 @@ export async function listLeaderboard(
   classId: string | undefined,
   db: Db = defaultDb,
 ) {
-  const rows = await db.execute<{
-    student_id: string;
-    name: string;
-    student_no: string;
-    anon_code: string | null;
-    class_id: string;
-    class_name: string;
-    balance: number;
-    last_change_seq: number;
-  }>(sql`
-    SELECT s.student_id, s.name, s.student_no, s.anon_code, s.class_id, c.name AS class_name,
-           COALESCE(b.balance, 0)::int AS balance,
-           COALESCE(b.last_change_seq, 0)::bigint AS last_change_seq
-    FROM student s
-    JOIN class c ON c.class_id = s.class_id
-    LEFT JOIN point_balance b ON b.student_id = s.student_id AND b.term_id = ${termId}
-    WHERE s.status = 'active'
-      AND (${classId ?? null}::uuid IS NULL OR s.class_id = ${classId ?? null}::uuid)
-  `);
-  const sorted = [...rows].sort((a, b) =>
-    compareRank(
-      { ...a, balance: Number(a.balance), last_change_seq: Number(a.last_change_seq) },
-      { ...b, balance: Number(b.balance), last_change_seq: Number(b.last_change_seq) },
-    ),
+  const rows = await pointsRepo.listRanked(db, termId, classId);
+  return assignRanks(
+    rows.map((row) => ({
+      student_id: row.student_id,
+      name: row.student_name,
+      student_no: row.student_no,
+      anon_code: null,
+      class_id: row.class_id,
+      class_name: row.class_name,
+      balance: Number(row.balance),
+      last_change_seq: Number(row.last_change_seq),
+    })),
   );
-  return assignRanks(sorted.map((row) => ({ ...row, balance: Number(row.balance), last_change_seq: Number(row.last_change_seq) })));
 }
 
 /* ------------------------------------------------------------------ */

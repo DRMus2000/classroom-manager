@@ -81,57 +81,77 @@ describe('duty rounds', { timeout: 180_000 }, () => {
 
       const started = await duty.startRound(actor, classId, '8f2c0000-0000-4000-8000-000000000082');
       assert.equal(started.member_count, 1);
-      const absent = await duty.confirmAbsent(
+      const attended = await duty.markAttendance(
         actor,
         started.round_id,
-        termId,
+        [termId],
         1,
         '8f2c0000-0000-4000-8000-000000000083',
       );
-      assert.equal(absent.before_required, 3);
-      assert.equal(absent.after_required, 4);
-
-      await assert.rejects(
-        () =>
-          duty.confirmAbsent(actor, started.round_id, termId, absent.version, '8f2c0000-0000-4000-8000-000000000084'),
-        (err: unknown) => {
-          assert.ok(err instanceof AppError);
-          return true;
-        },
+      const frozen = await duty.freezeCandidates(
+        actor,
+        started.round_id,
+        attended.version,
+        '8f2c0000-0000-4000-8000-000000000084',
       );
-
-      const frozen = await duty.freezeCandidates(actor, started.round_id, '8f2c0000-0000-4000-8000-000000000085');
-      assert.equal(frozen.candidates.length, 0);
-      const again = await duty.freezeCandidates(actor, started.round_id, '8f2c0000-0000-4000-8000-000000000086');
-      assert.deepEqual(again.candidates, frozen.candidates);
-
-      const state = await duty.getRound(started.round_id);
+      assert.equal(frozen.candidates.length, 1);
       const drawn = await duty.drawSelection(
         actor,
         started.round_id,
         incomingId,
-        state.version,
-        '8f2c0000-0000-4000-8000-000000000087',
+        frozen.version,
+        '8f2c0000-0000-4000-8000-000000000085',
       );
-      assert.equal(drawn.outcome, 'direct_appoint');
-      assert.equal(drawn.picked.length, 0);
-
+      assert.equal(drawn.status, 'pending');
+      assert.equal(drawn.picked[0]?.student_id, originalId);
+      const current = await duty.getRound(started.round_id);
       await assert.rejects(
-        () => duty.closeRound(actor, started.round_id, state.version, '8f2c0000-0000-4000-8000-000000000088'),
+        () => duty.closeRound(actor, started.round_id, current.version, '8f2c0000-0000-4000-8000-000000000086'),
         (err: unknown) => {
           assert.ok(err instanceof AppError);
-          assert.equal(err.code, 'VERSION_CONFLICT');
+          assert.equal(err.code, 'DUTY_SELECTION_OPEN');
           return true;
         },
       );
-      const latest = await duty.getRound(started.round_id);
-      const closed = await duty.closeRound(
+      const cancelled = await duty.cancelSelection(
+        actor,
+        drawn.selection_id,
+        current.version,
+        '8f2c0000-0000-4000-8000-000000000087',
+      );
+      assert.equal(cancelled.picked[0]?.student_id, originalId);
+      const selections = await client.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM duty_selection WHERE round_id = $1`,
+        [started.round_id],
+      );
+      assert.equal(selections.rows[0]!.n, 1);
+      const again = await duty.getSelection(drawn.selection_id);
+      assert.equal((again.picked[0] as { student_id: string }).student_id, originalId);
+      const afterCancel = await duty.getRound(started.round_id);
+      const absent = await duty.confirmAbsent(
         actor,
         started.round_id,
-        latest.version,
-        '8f2c0000-0000-4000-8000-000000000089',
+        termId,
+        afterCancel.version,
+        '8f2c0000-0000-4000-8000-000000000088',
       );
-      assert.equal(closed.status, 'closed');
+      assert.equal(absent.before_required, 3);
+      assert.equal(absent.after_required, 4);
+      await assert.rejects(
+        () =>
+          duty.confirmAbsent(
+            actor,
+            started.round_id,
+            termId,
+            absent.version,
+            '8f2c0000-0000-4000-8000-000000000089',
+          ),
+        (err: unknown) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.code, 'FORBIDDEN');
+          return true;
+        },
+      );
     } finally {
       await client.end();
     }

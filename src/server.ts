@@ -180,11 +180,12 @@ export async function buildServer() {
   app.post('/api/v1/auth/password', async (request, reply) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof changePasswordInput.parse>>(changePasswordInput, request.body);
-    const { token } = await authService.changePassword(user.teacher_id, user.session_id, body, db, {
+    const changed = await authService.changePassword(user.teacher_id, user.session_id, body, db, {
       ip: request.ip,
       user_agent: request.headers['user-agent'],
     });
-    reply.setCookie(SESSION_COOKIE, token, {
+    if (!changed.token) return { ok: true };
+    reply.setCookie(SESSION_COOKIE, changed.token, {
       httpOnly: true,
       sameSite: 'lax',
       path: '/',
@@ -588,7 +589,7 @@ export async function buildServer() {
   app.post('/api/v1/duty/rounds/:id/candidates/freeze', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
-    return dutyService.freezeCandidates(user.teacher_id, routeId(request), body.request_id);
+    return dutyService.freezeCandidates(user.teacher_id, routeId(request), body.expected_version, body.request_id);
   });
 
   app.post('/api/v1/duty/rounds/:id/selections', async (request) => {
@@ -605,19 +606,19 @@ export async function buildServer() {
   app.post('/api/v1/duty/selections/:id/cancel', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
-    return dutyService.cancelSelection(user.teacher_id, routeId(request), body.request_id);
+    return dutyService.cancelSelection(user.teacher_id, routeId(request), body.expected_version, body.request_id);
   });
 
   app.post('/api/v1/duty/selections/:id/reopen', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
-    return dutyService.reopenSelection(user.teacher_id, routeId(request), body.request_id);
+    return dutyService.reopenSelection(user.teacher_id, routeId(request), body.expected_version, body.request_id);
   });
 
   app.post('/api/v1/duty/selections/:id/confirm', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
-    return dutyService.confirmSelection(user.teacher_id, routeId(request), body.request_id);
+    return dutyService.confirmSelection(user.teacher_id, routeId(request), body.expected_version, body.request_id);
   });
 
   app.post('/api/v1/duty/terms/:id/correct', async (request) => {

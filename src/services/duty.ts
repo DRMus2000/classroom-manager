@@ -254,16 +254,17 @@ export async function markAttendance(
       if (applied.counted && member.duty_term_id) {
         await tx.execute(
           sql`UPDATE duty_round_member
-              SET attended = true, counted_round = true
+              SET attended = true,
+                  counted_round = true,
+                  eligible_for_backfill = ${applied.member.eligible_for_backfill}
               WHERE round_id = ${roundId} AND student_id = ${member.student_id}`,
         );
         await tx.execute(
           sql`UPDATE duty_term
               SET completed_count = ${applied.member.completed_count},
                   status = ${applied.member.term_status},
-                  eligible_for_backfill = ${applied.member.eligible_for_backfill},
-                  retired_at = CASE WHEN ${applied.retired} THEN now() ELSE retired_at END,
-                  retire_reason = CASE WHEN ${applied.retired} THEN '完成应值次数' ELSE retire_reason END
+                  retired_at = CASE WHEN ${applied.retired}::boolean THEN now() ELSE retired_at END,
+                  retire_reason = CASE WHEN ${applied.retired}::boolean THEN '完成应值次数' ELSE retire_reason END
               WHERE duty_term_id = ${member.duty_term_id}`,
         );
       }
@@ -351,9 +352,16 @@ export async function confirmAbsent(
   });
 }
 
-export async function freezeCandidates(actorId: string, roundId: string, requestId: string, db: Db = defaultDb) {
-  return idempotentTx(db, requestId, `POST /api/v1/duty/rounds/${roundId}/candidates/freeze`, { request_id: requestId }, async (tx) => {
+export async function freezeCandidates(
+  actorId: string,
+  roundId: string,
+  expectedVersion: number,
+  requestId: string,
+  db: Db = defaultDb,
+) {
+  return idempotentTx(db, requestId, `POST /api/v1/duty/rounds/${roundId}/candidates/freeze`, { request_id: requestId, expected_version: expectedVersion }, async (tx) => {
     const round = await lockRound(tx, roundId);
+    assertVersion(round, expectedVersion);
     if (round.frozen_at) {
       const existing = await tx.execute<{ student_id: string; duty_term_id: string }>(
         sql`SELECT student_id, duty_term_id FROM duty_candidate
@@ -408,6 +416,12 @@ export async function drawSelection(
     );
     const outcome = selectionOutcome(pool.length);
     if (outcome === 'direct_appoint') {
+      const student = await tx.execute<{ class_id: string; status: string }>(
+        sql`SELECT class_id, status FROM student WHERE student_id = ${studentId}`,
+      );
+      if (student[0]?.class_id !== round.class_id || student[0]?.status !== 'active') {
+        throw Errors.notFound('本班在班学生', studentId);
+      }
       const seq = await tx.execute<{ n: number }>(
         sql`SELECT COALESCE(MAX(seq_no), 0)::int AS n FROM duty_term
             WHERE line_id = ${round.line_id} AND student_id = ${studentId}`,
@@ -423,6 +437,7 @@ export async function drawSelection(
             RETURNING selection_id`,
       );
       await bump(tx, roundId);
+      await broadcast(tx, round.class_id, roundId, 'direct_appoint', requestId);
       return {
         selection_id: selection[0]!.selection_id,
         status: 'confirmed',
@@ -497,9 +512,17 @@ export async function getSelection(selectionId: string, db: Db = defaultDb) {
   return { ...rows[0], picked };
 }
 
-export async function cancelSelection(actorId: string, selectionId: string, requestId: string, db: Db = defaultDb) {
-  return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/cancel`, { request_id: requestId }, async (tx) => {
+export async function cancelSelection(
+  actorId: string,
+  selectionId: string,
+  expectedVersion: number,
+  requestId: string,
+  db: Db = defaultDb,
+) {
+  return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/cancel`, { request_id: requestId, expected_version: expectedVersion }, async (tx) => {
     const selection = await loadSelection(tx, selectionId);
+    const round = await lockRound(tx, selection.round_id);
+    assertVersion(round, expectedVersion);
     if (selection.status === 'cancelled') return selection;
     if (selection.status !== 'pending') throw Errors.forbidden('只有待确认抽选可以取消');
     await tx.execute(
@@ -510,9 +533,17 @@ export async function cancelSelection(actorId: string, selectionId: string, requ
   });
 }
 
-export async function reopenSelection(actorId: string, selectionId: string, requestId: string, db: Db = defaultDb) {
-  return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/reopen`, { request_id: requestId }, async (tx) => {
+export async function reopenSelection(
+  actorId: string,
+  selectionId: string,
+  expectedVersion: number,
+  requestId: string,
+  db: Db = defaultDb,
+) {
+  return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/reopen`, { request_id: requestId, expected_version: expectedVersion }, async (tx) => {
     const selection = await loadSelection(tx, selectionId);
+    const round = await lockRound(tx, selection.round_id);
+    assertVersion(round, expectedVersion);
     if (selection.status === 'pending') return selection;
     if (selection.status !== 'cancelled') throw Errors.forbidden('只有已取消抽选可以重新打开');
     await tx.execute(
@@ -523,9 +554,17 @@ export async function reopenSelection(actorId: string, selectionId: string, requ
   });
 }
 
-export async function confirmSelection(actorId: string, selectionId: string, requestId: string, db: Db = defaultDb) {
-  return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/confirm`, { request_id: requestId }, async (tx) => {
+export async function confirmSelection(
+  actorId: string,
+  selectionId: string,
+  expectedVersion: number,
+  requestId: string,
+  db: Db = defaultDb,
+) {
+  return idempotentTx(db, requestId, `POST /api/v1/duty/selections/${selectionId}/confirm`, { request_id: requestId, expected_version: expectedVersion }, async (tx) => {
     const selection = await loadSelection(tx, selectionId);
+    const round = await lockRound(tx, selection.round_id);
+    assertVersion(round, expectedVersion);
     if (selection.status === 'confirmed') return selection;
     if (selection.status !== 'pending') throw Errors.forbidden('只有待确认抽选可以确认');
     for (const item of selection.picked) {
@@ -582,6 +621,15 @@ export async function correctTerm(
     );
     const term = terms[0];
     if (!term) throw Errors.notFound('卫生任期', dutyTermId);
+    const openRound = await tx.execute<RoundRow>(
+      sql`SELECT r.round_id, r.line_id, l.class_id, r.seq_no, r.status, r.frozen_at, r.version
+          FROM duty_round r
+          JOIN duty_line l ON l.line_id = r.line_id
+          WHERE r.line_id = ${term.line_id} AND r.status = 'in_progress'
+          FOR UPDATE OF r`,
+    );
+    if (!openRound[0]) throw Errors.versionConflict('没有进行中的卫生轮次');
+    assertVersion(openRound[0], input.expected_version);
     const before = { status: term.status, completed_count: Number(term.completed_count), required_count: Number(term.required_count) };
     if (input.action === 'release') {
       await tx.execute(
