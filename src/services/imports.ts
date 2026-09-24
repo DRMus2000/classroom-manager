@@ -43,6 +43,7 @@ interface PreviewPayload {
   expiresAt: number;
   contentHash: string;
   seatVersion: number;
+  committable: boolean;
 }
 
 /**
@@ -459,6 +460,9 @@ export async function buildPreview(
     });
   }
 
+  const errorCount = allIssues.filter((i) => i.severity === 'error').length;
+  const warnCount = allIssues.filter((i) => i.severity === 'warning').length;
+
   // —— 生成预览令牌
   cleanupPreviews();
   const contentHash = createHash('sha256').update(buffer).digest('hex');
@@ -473,10 +477,8 @@ export async function buildPreview(
     expiresAt: Date.now() + PREVIEW_TTL_MS,
     contentHash,
     seatVersion: cls.seat_version,
+    committable: errorCount === 0 && blockers.length === 0,
   });
-
-  const errorCount = allIssues.filter((i) => i.severity === 'error').length;
-  const warnCount = allIssues.filter((i) => i.severity === 'warning').length;
 
   return {
     preview_token: token,
@@ -539,6 +541,12 @@ export async function commitImport(
       throw Errors.versionConflict(
         `班级座次版本已变更（当前 ${cls.seat_version}，提交 ${expectedVersion}），请载入最新状态`,
       );
+    }
+
+    if (!payload.committable) {
+      throw Errors.importInvalid([
+        { code: 'IMPORT_CONFLICT', message: '预览存在冲突，整单拒绝，没有写入学生或座次' },
+      ]);
     }
 
     const term = await classRepo.currentTerm(tx);
