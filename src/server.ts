@@ -1,7 +1,6 @@
 /**
  * HTTP 入口。路由调用已经按设计文档改过的服务。
- * 导出仍没有对应服务，这些路径返回 404。
- * 名单导入提供模板下载、预览和提交。点名与倒计时写入后广播 SSE。
+ * 名单导入提供模板下载、预览和提交。点名、倒计时和 Excel 导出已接上。
  */
 
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
@@ -27,6 +26,7 @@ import * as replayService from './services/replay.js';
 import * as importService from './services/imports.js';
 import * as rollcallService from './services/rollcall.js';
 import * as countdownService from './services/countdown.js';
+import * as exportService from './services/export.js';
 import {
   MAX_IMPORT_BYTES,
   XLSX_MIME,
@@ -95,6 +95,23 @@ interface AuthUser {
 
 function routeId(request: FastifyRequest): string {
   return parse<{ id: string }>(z.object({ id: uuid }), request.params).id;
+}
+
+function leaderboardScope(query: unknown): { term_id: string; class_id?: string } {
+  const parsed = parse<{ term_id: string; class_id?: string }>(
+    z.object({
+      term_id: uuid,
+      class_id: z.string().optional(),
+    }),
+    query,
+  );
+  const classId = !parsed.class_id || parsed.class_id === 'all' ? undefined : parsed.class_id;
+  if (classId && !uuid.safeParse(classId).success) {
+    throw new AppError('VALIDATION_FAILED', '请求参数不正确', {
+      issues: [{ path: ['class_id'], message: '必须是 UUID 或 all' }],
+    });
+  }
+  return { term_id: parsed.term_id, class_id: classId };
 }
 
 function parse<T>(schema: ZodTypeAny, value: unknown): T {
@@ -601,20 +618,8 @@ export async function buildServer() {
 
   app.get('/api/v1/leaderboard', async (request) => {
     await requireUser(request);
-    const query = parse<{ term_id: string; class_id?: string }>(
-      z.object({
-        term_id: uuid,
-        class_id: z.string().optional(),
-      }),
-      request.query,
-    );
-    const classId = !query.class_id || query.class_id === 'all' ? undefined : query.class_id;
-    if (classId && !uuid.safeParse(classId).success) {
-      throw new AppError('VALIDATION_FAILED', '请求参数不正确', {
-        issues: [{ path: ['class_id'], message: '必须是 UUID 或 all' }],
-      });
-    }
-    return { items: await pointsService.listLeaderboard(query.term_id, classId) };
+    const query = leaderboardScope(request.query);
+    return { items: await pointsService.listLeaderboard(query.term_id, query.class_id) };
   });
 
   app.get('/api/v1/points/entries', async (request) => {
@@ -702,6 +707,38 @@ export async function buildServer() {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof dutyVersionInput.parse>>(dutyVersionInput, request.body);
     return dutyService.closeRound(user.teacher_id, routeId(request), body.expected_version, body.request_id);
+  });
+
+  app.get('/api/v1/classes/:id/export/roster', async (request, reply) => {
+    await requireUser(request);
+    const file = await exportService.exportRoster(routeId(request));
+    return reply
+      .header('Content-Type', XLSX_MIME)
+      .header('Content-Disposition', contentDisposition(file.filename))
+      .header('Content-Length', String(file.body.length))
+      .send(file.body);
+  });
+
+  app.get('/api/v1/export/points', async (request, reply) => {
+    await requireUser(request);
+    const query = parse<ReturnType<typeof listEntriesQuery.parse>>(listEntriesQuery, request.query);
+    const file = await exportService.exportPoints(query);
+    return reply
+      .header('Content-Type', XLSX_MIME)
+      .header('Content-Disposition', contentDisposition(file.filename))
+      .header('Content-Length', String(file.body.length))
+      .send(file.body);
+  });
+
+  app.get('/api/v1/export/leaderboard', async (request, reply) => {
+    await requireUser(request);
+    const query = leaderboardScope(request.query);
+    const file = await exportService.exportLeaderboard(query.term_id, query.class_id);
+    return reply
+      .header('Content-Type', XLSX_MIME)
+      .header('Content-Disposition', contentDisposition(file.filename))
+      .header('Content-Length', String(file.body.length))
+      .send(file.body);
   });
 
   app.get('/api/v1/classes/:id/rollcall', async (request) => {

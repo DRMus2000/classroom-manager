@@ -523,37 +523,42 @@ export async function reverseEntry(
 /* 查询                                                                */
 /* ------------------------------------------------------------------ */
 
+export function entryFilterFromQuery(q: ListEntriesQuery): {
+  term_id?: string;
+  class_id?: string;
+  student_id?: string;
+  date_from?: Date;
+  date_to?: Date;
+  direction?: 'add' | 'sub';
+  reason_template_id?: string;
+  include_reversals: boolean;
+  cursor_seq?: number;
+  limit: number;
+} {
+  return {
+    term_id: q.term_id,
+    class_id: q.class_id,
+    student_id: q.student_id,
+    date_from: q.date_from ? new Date(q.date_from) : undefined,
+    date_to: q.date_to ? new Date(q.date_to) : undefined,
+    direction: q.direction,
+    reason_template_id: q.reason_template_id,
+    include_reversals: q.include_reversals,
+    cursor_seq: q.cursor ? Number(q.cursor) : undefined,
+    limit: q.limit ?? 50,
+  };
+}
+
 export async function listTimeline(
   q: ListEntriesQuery,
   db: Db = defaultDb,
 ): Promise<{ items: TimelineEventDto[]; next_cursor: string | null }> {
   const limit = q.limit ?? 50;
-  const rows = await pointsRepo.listEntries(db, {
-    term_id: q.term_id,
-    class_id: q.class_id,
-    student_id: q.student_id,
-    date_from: q.date_from ? new Date(q.date_from) : undefined,
-    date_to: q.date_to ? new Date(q.date_to) : undefined,
-    direction: q.direction,
-    reason_template_id: q.reason_template_id,
-    include_reversals: q.include_reversals,
-    cursor_seq: q.cursor ? Number(q.cursor) : undefined,
-    limit: limit + 1,
-  });
+  const filter = entryFilterFromQuery(q);
+  const rows = await pointsRepo.listEntries(db, { ...filter, limit: limit + 1 });
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
-  const grouped = await pointsRepo.listTimeline(db, {
-    term_id: q.term_id,
-    class_id: q.class_id,
-    student_id: q.student_id,
-    date_from: q.date_from ? new Date(q.date_from) : undefined,
-    date_to: q.date_to ? new Date(q.date_to) : undefined,
-    direction: q.direction,
-    reason_template_id: q.reason_template_id,
-    include_reversals: q.include_reversals,
-    cursor_seq: q.cursor ? Number(q.cursor) : undefined,
-    limit,
-  });
+  const grouped = await pointsRepo.listTimeline(db, { ...filter, limit });
   const last = page[page.length - 1];
   return {
     items: grouped.map((row) => ({
