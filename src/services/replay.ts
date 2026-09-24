@@ -2,7 +2,7 @@
  * 回放读取与检查点任务。检查点在记分事务之外由独立命令写入。
  */
 
-import { type Db, db as defaultDb } from '../repo/db.js';
+import { acquireAdvisoryLock, type Db, db as defaultDb } from '../repo/db.js';
 import * as replayRepo from '../repo/replay.js';
 import * as auditRepo from '../repo/audit.js';
 import * as classRepo from '../repo/class.js';
@@ -21,6 +21,7 @@ import type { ReplayMode } from '../lib/schema.js';
 import { toIsoTimestamp } from '../lib/time.js';
 
 export const CHECKPOINT_EVENT_THRESHOLD = 200;
+export const CHECKPOINT_LOCK_KEY = 'classroom:replay_checkpoint';
 
 export function shouldWriteCheckpoint(
   eventsSinceLast: number,
@@ -28,8 +29,43 @@ export function shouldWriteCheckpoint(
   threshold = CHECKPOINT_EVENT_THRESHOLD,
 ): boolean {
   if (!Number.isFinite(eventsSinceLast) || eventsSinceLast < 0) return false;
-  if (!Number.isFinite(threshold) || threshold <= 0) return false;
-  return dailyDue || eventsSinceLast >= threshold;
+  if (dailyDue) return true;
+  if (!Number.isInteger(threshold) || threshold <= 0) return false;
+  return eventsSinceLast >= threshold;
+}
+
+/** 合法阈值：job_config 优先，其次环境变量，最后默认 200。非法值不采用。 */
+export function resolveCheckpointThreshold(
+  configured: unknown,
+  envValue: string | undefined,
+  fallback = CHECKPOINT_EVENT_THRESHOLD,
+): number {
+  return positiveThreshold(configured) ?? positiveThreshold(envValue) ?? fallback;
+}
+
+function positiveThreshold(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 1_000_000) {
+    return value;
+  }
+  if (typeof value === 'string' && /^[1-9]\d{0,6}$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (parsed <= 1_000_000) return parsed;
+  }
+  return null;
+}
+
+export function parseCheckpointArgs(argv: readonly string[]): { daily: boolean } {
+  let daily = false;
+  for (const arg of argv) {
+    if (arg === '--') continue;
+    if (arg === '--daily') {
+      if (daily) throw new Error('参数 --daily 重复');
+      daily = true;
+      continue;
+    }
+    throw new Error(`未知参数：${arg}`);
+  }
+  return { daily };
 }
 
 function iso(value: Date | string): string {
@@ -38,14 +74,6 @@ function iso(value: Date | string): string {
 
 function identityMap(rows: ReplayIdentity[]): Map<string, ReplayIdentity> {
   return new Map(rows.map((row) => [row.student_id, row]));
-}
-
-function configNumber(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
-    return Number(value);
-  }
-  return fallback;
 }
 
 async function worldAtSeq(
@@ -225,41 +253,72 @@ export async function replayStateAt(
 export async function writeDueCheckpoints(
   input: { daily: boolean },
   db: Db = defaultDb,
-): Promise<{ written: number; skipped: number }> {
-  const term = await classRepo.currentTerm(db);
-  if (!term) return { written: 0, skipped: 0 };
+): Promise<{ written: number; skipped: number; failed: number; busy: boolean }> {
+  const release = await acquireAdvisoryLock(CHECKPOINT_LOCK_KEY);
+  if (!release) return { written: 0, skipped: 0, failed: 0, busy: true };
+  try {
+    return await writeDueCheckpointsUnlocked(input, db);
+  } finally {
+    await release();
+  }
+}
 
-  const threshold = configNumber(
-    await auditRepo.getJobConfig(db, 'replay_checkpoint_event_threshold', CHECKPOINT_EVENT_THRESHOLD),
-    CHECKPOINT_EVENT_THRESHOLD,
+async function writeDueCheckpointsUnlocked(
+  input: { daily: boolean },
+  db: Db,
+): Promise<{ written: number; skipped: number; failed: number; busy: boolean }> {
+  const term = await classRepo.currentTerm(db);
+  if (!term) return { written: 0, skipped: 0, failed: 0, busy: false };
+
+  const configured = await auditRepo.getJobConfig<unknown>(
+    db,
+    'replay_checkpoint_event_threshold',
+    null,
   );
-  const classes = await classRepo.listClasses(db, true);
+  const threshold = resolveCheckpointThreshold(
+    configured,
+    process.env.REPLAY_CHECKPOINT_EVENT_THRESHOLD,
+  );
+  const classes = await classRepo.listClasses(db, false);
   let written = 0;
   let skipped = 0;
+  let failed = 0;
 
   for (const cls of classes) {
-    const latest = await auditRepo.latestCheckpoint(db, cls.class_id, term.term_id);
-    const sinceSeq = latest ? Number(latest.upto_event_seq) : 0;
-    const eventsSinceLast = await auditRepo.countReplayEventsSince(db, cls.class_id, sinceSeq);
-    if (!shouldWriteCheckpoint(eventsSinceLast, input.daily, threshold)) {
-      skipped += 1;
-      continue;
+    try {
+      const outcome = await writeClassCheckpoint(db, cls.class_id, term.term_id, input.daily, threshold);
+      if (outcome === 'written') written += 1;
+      else skipped += 1;
+    } catch (err) {
+      failed += 1;
+      const detail = err instanceof Error ? err.message : '未知错误';
+      console.error(`检查点写入失败 class_id=${cls.class_id} ${detail.slice(0, 300)}`);
     }
-    const uptoSeq = await replayRepo.maxReplaySeqForClass(db, cls.class_id, term.term_id);
-    if (uptoSeq <= 0 || uptoSeq === sinceSeq) {
-      skipped += 1;
-      continue;
-    }
-    const world = await worldAtSeq(term.term_id, cls.class_id, uptoSeq, db);
-    await auditRepo.insertCheckpoint(db, {
-      class_id: cls.class_id,
-      term_id: term.term_id,
-      upto_event_seq: uptoSeq,
-      state: snapshotWorld(world),
-      trigger_reason: input.daily && eventsSinceLast < threshold ? 'daily' : 'event_threshold',
-    });
-    written += 1;
   }
 
-  return { written, skipped };
+  return { written, skipped, failed, busy: false };
+}
+
+async function writeClassCheckpoint(
+  db: Db,
+  classId: string,
+  termId: string,
+  daily: boolean,
+  threshold: number,
+): Promise<'written' | 'skipped'> {
+  const latest = await auditRepo.latestCheckpoint(db, classId, termId);
+  const sinceSeq = latest ? Number(latest.upto_event_seq) : 0;
+  const eventsSinceLast = await replayRepo.countReplayEventsSince(db, classId, termId, sinceSeq);
+  if (!shouldWriteCheckpoint(eventsSinceLast, daily, threshold)) return 'skipped';
+  const uptoSeq = await replayRepo.maxReplaySeqForClass(db, classId, termId);
+  if (!Number.isInteger(uptoSeq) || uptoSeq <= 0 || uptoSeq === sinceSeq) return 'skipped';
+  const world = await worldAtSeq(termId, classId, uptoSeq, db);
+  const inserted = await auditRepo.insertCheckpoint(db, {
+    class_id: classId,
+    term_id: termId,
+    upto_event_seq: uptoSeq,
+    state: snapshotWorld(world),
+    trigger_reason: daily && eventsSinceLast < threshold ? 'daily' : 'event_threshold',
+  });
+  return inserted ? 'written' : 'skipped';
 }

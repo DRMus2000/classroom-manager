@@ -119,6 +119,24 @@ export async function maxReplaySeqAt(
   return Number(rows[0]?.event_seq ?? 0);
 }
 
+/** 当前学期、本班自某序号之后的回放事件数。计数口径与回放读取一致。 */
+export async function countReplayEventsSince(
+  db: Db | Tx,
+  classId: string,
+  termId: string,
+  sinceSeq: number,
+): Promise<number> {
+  if (!Number.isInteger(sinceSeq) || sinceSeq < 0) return 0;
+  const rows = await db.execute<{ cnt: number }>(sql`
+    SELECT COUNT(*)::int AS cnt FROM event_log
+    WHERE replay_relevant
+      AND event_seq > ${sinceSeq}
+      AND ${classScope(classId)}
+      AND ${replayKinds(termId)}
+  `);
+  return Number(rows[0]?.cnt ?? 0);
+}
+
 export async function maxReplaySeqForClass(
   db: Db | Tx,
   classId: string,

@@ -7,21 +7,28 @@
  */
 
 import { closeDb } from '../src/repo/db.js';
-import { writeDueCheckpoints } from '../src/services/replay.js';
+import { parseCheckpointArgs, writeDueCheckpoints } from '../src/services/replay.js';
 
 async function main(): Promise<void> {
-  const daily = process.argv.includes('--daily');
+  const { daily } = parseCheckpointArgs(process.argv.slice(2));
   const result = await writeDueCheckpoints({ daily });
-  console.log(
-    daily
-      ? `✓ 每日检查点：写入 ${result.written} 条，跳过 ${result.skipped} 个班`
-      : `✓ 阈值检查点：写入 ${result.written} 条，跳过 ${result.skipped} 个班`,
-  );
+  if (result.busy) {
+    console.log('另一检查点任务正在运行，本次跳过。');
+    return;
+  }
+  const summary = `写入 ${result.written} 条，跳过 ${result.skipped} 个班，失败 ${result.failed} 个班`;
+  if (result.failed > 0) {
+    console.error(daily ? `每日检查点部分失败：${summary}` : `阈值检查点部分失败：${summary}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(daily ? `✓ 每日检查点：${summary}` : `✓ 阈值检查点：${summary}`);
 }
 
 main()
-  .catch((err) => {
-    console.error('检查点任务失败：', err);
+  .catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : '未知错误';
+    console.error(`检查点任务失败：${message}`);
     process.exitCode = 1;
   })
   .finally(() => closeDb());

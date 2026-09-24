@@ -91,6 +91,40 @@ export async function closeDb(): Promise<void> {
 }
 
 /**
+ * 会话级咨询锁。拿到锁的连接必须用来解锁，所以锁和业务查询可以不在同一条连接上。
+ * 没拿到锁时返回 null，调用方应跳过本次任务。
+ */
+export async function acquireAdvisoryLock(key: string): Promise<(() => Promise<void>) | null> {
+  if (key.length === 0 || key.length > 200) {
+    throw new Error('咨询锁键无效');
+  }
+  const client = await pool.connect();
+  try {
+    const locked = await client.query<{ locked: boolean }>(
+      'SELECT pg_try_advisory_lock(hashtextextended($1::text, 0)) AS locked',
+      [key],
+    );
+    if (!locked.rows[0]?.locked) {
+      client.release();
+      return null;
+    }
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtextextended($1::text, 0))', [key]);
+      } finally {
+        client.release();
+      }
+    };
+  } catch (err) {
+    client.release();
+    throw err;
+  }
+}
+
+/**
  * 当前 UTC 时间（用于 `occurred_at`/`created_at` 等字段）。
  * 界面渲染时按 SERVER_TZ 转换。
  */

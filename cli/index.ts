@@ -16,6 +16,7 @@ import { db, withTx, sql, closeDb } from '../src/repo/db.js';
 import * as authRepo from '../src/repo/auth.js';
 import * as pointsRepo from '../src/repo/points.js';
 import { cleanupExpiredIdempotency } from '../src/services/idempotency.js';
+import { writeDueCheckpoints } from '../src/services/replay.js';
 import { hashPassword } from '../src/lib/crypto.js';
 
 /** 交互式读取隐藏输入（不回显）。 */
@@ -180,6 +181,25 @@ async function cleanupIdempotency(args: Record<string, string>): Promise<void> {
   console.log(`✓ 清理了 ${count} 条过期幂等记录（保留最近 ${days} 天）。`);
 }
 
+async function checkpoint(args: Record<string, string>): Promise<void> {
+  if (args['daily'] !== undefined && args['daily'] !== 'true') {
+    console.error('用法：checkpoint [--daily]');
+    process.exit(1);
+  }
+  const result = await writeDueCheckpoints({ daily: args['daily'] === 'true' });
+  if (result.busy) {
+    console.log('另一检查点任务正在运行，本次跳过。');
+    return;
+  }
+  const summary = `写入 ${result.written} 条，跳过 ${result.skipped} 个班，失败 ${result.failed} 个班`;
+  if (result.failed > 0) {
+    console.error(`检查点部分失败：${summary}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`✓ 检查点：${summary}`);
+}
+
 async function anonExportStatus(): Promise<void> {
   const rows = await db.execute<{
     anon_id: string;
@@ -216,6 +236,7 @@ const COMMANDS: Record<string, (args: Record<string, string>) => Promise<void>> 
   'recompute-balance': recomputeBalance,
   'cleanup-idempotency': cleanupIdempotency,
   'anon-export-status': anonExportStatus,
+  checkpoint,
 };
 
 async function main(): Promise<void> {
@@ -229,6 +250,7 @@ async function main(): Promise<void> {
     console.log('  recompute-balance --term <term_id>        重算余额并与缓存比对');
     console.log('  cleanup-idempotency --days 7              清理过期幂等记录');
     console.log('  anon-export-status                        查看匿名化账本导出状态');
+    console.log('  checkpoint [--daily]                     写入到期回放检查点');
     process.exit(cmd ? 1 : 0);
   }
 

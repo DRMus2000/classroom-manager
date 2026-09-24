@@ -206,13 +206,15 @@ export async function insertCheckpoint(
     state: unknown;
     trigger_reason: 'event_threshold' | 'daily' | 'manual';
   },
-): Promise<void> {
-  await db.execute(
+): Promise<boolean> {
+  const rows = await db.execute<{ checkpoint_id: string }>(
     sql`INSERT INTO replay_checkpoint (class_id, term_id, upto_event_seq, state, trigger_reason)
         VALUES (${input.class_id}, ${input.term_id}, ${input.upto_event_seq},
                 ${JSON.stringify(input.state)}, ${input.trigger_reason})
-        ON CONFLICT (class_id, term_id, upto_event_seq) DO NOTHING`,
+        ON CONFLICT (class_id, term_id, upto_event_seq) DO NOTHING
+        RETURNING checkpoint_id`,
   );
+  return rows.length > 0;
 }
 
 /** 读取可调参数。 */
