@@ -17,6 +17,7 @@ import * as authRepo from '../src/repo/auth.js';
 import * as pointsRepo from '../src/repo/points.js';
 import { cleanupExpiredIdempotency } from '../src/services/idempotency.js';
 import { writeDueCheckpoints } from '../src/services/replay.js';
+import { dumpWithPgDump, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
 import { hashPassword } from '../src/lib/crypto.js';
 
 /** 交互式读取隐藏输入（不回显）。 */
@@ -200,6 +201,27 @@ async function checkpoint(args: Record<string, string>): Promise<void> {
   console.log(`✓ 检查点：${summary}`);
 }
 
+async function backup(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl || databaseUrl.trim() === '') throw new Error('DATABASE_URL 未设置');
+  const result = await runDailyBackup({
+    dir: process.env.BACKUP_DIR?.trim() || 'backups',
+    retentionDays: resolveRetentionDays(process.env.BACKUP_RETENTION_DAYS),
+    dump: (filePath) => dumpWithPgDump(databaseUrl, filePath),
+  });
+  if (result.status === 'busy') {
+    console.log('另一备份任务正在运行，本次跳过。');
+    return;
+  }
+  if (result.disk_warning) console.error(`磁盘告警：剩余 ${result.disk_free_bytes} 字节，低于 3GB。`);
+  if (result.status === 'failed') {
+    console.error(`备份失败告警：${result.error ?? '未知错误'}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`✓ 备份完成：${result.file_name}，清理 ${result.removed.length} 个过期文件`);
+}
+
 async function anonExportStatus(): Promise<void> {
   const rows = await db.execute<{
     anon_id: string;
@@ -237,6 +259,7 @@ const COMMANDS: Record<string, (args: Record<string, string>) => Promise<void>> 
   'cleanup-idempotency': cleanupIdempotency,
   'anon-export-status': anonExportStatus,
   checkpoint,
+  backup,
 };
 
 async function main(): Promise<void> {
@@ -251,13 +274,15 @@ async function main(): Promise<void> {
     console.log('  cleanup-idempotency --days 7              清理过期幂等记录');
     console.log('  anon-export-status                        查看匿名化账本导出状态');
     console.log('  checkpoint [--daily]                     写入到期回放检查点');
+    console.log('  backup                                    执行 pg_dump 并记录结果');
     process.exit(cmd ? 1 : 0);
   }
 
   try {
     await COMMANDS[cmd]!(args);
   } catch (err) {
-    console.error('命令执行失败：', err);
+    const message = err instanceof Error ? redactSecrets(err.message) : '未知错误';
+    console.error(`命令执行失败：${message}`);
     process.exitCode = 1;
   } finally {
     await closeDb();
