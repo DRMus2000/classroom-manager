@@ -283,7 +283,7 @@ export async function setTieBreakSeq(
   await db.execute(
     sql`UPDATE point_balance
         SET last_change_seq = ${eventSeq}
-        WHERE term_id = ${termId} AND student_id = ANY(${studentIds})`,
+        WHERE term_id = ${termId} AND student_id = ANY(${sql.param(studentIds)})`,
   );
 }
 
@@ -385,7 +385,7 @@ export async function listTimeline(
   const batches = await db.execute<BatchRow>(
     sql`SELECT batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
                member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id
-        FROM point_batch WHERE batch_id = ANY(${batchIds})`,
+        FROM point_batch WHERE batch_id = ANY(${sql.param(batchIds)})`,
   );
   const batchMap = new Map(batches.map((b) => [b.batch_id, b]));
 
@@ -417,7 +417,7 @@ export async function listTimeline(
         })),
       };
     })
-    .sort((a, b) => b.occurred_at.getTime() - a.occurred_at.getTime());
+    .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
 }
 
 /**
@@ -434,7 +434,7 @@ export async function listBalancesForStudents(
 
   const rows = await db.execute<{ student_id: string; balance: number }>(
     sql`SELECT student_id, balance FROM point_balance
-        WHERE term_id = ${termId} AND student_id = ANY(${studentIds})`,
+        WHERE term_id = ${termId} AND student_id = ANY(${sql.param(studentIds)})`,
   );
   for (const r of rows) map.set(r.student_id, r.balance);
 

@@ -21,6 +21,15 @@ import type {
   PatchClassInput,
 } from '../lib/schema.js';
 
+/** `db.execute` 把 timestamptz 返回成字符串，行类型上的 Date 并不可靠。 */
+function iso(value: Date | string): string {
+  return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  return value == null ? null : iso(value);
+}
+
 /* ------------------------------------------------------------------ */
 /* 班级                                                                */
 /* ------------------------------------------------------------------ */
@@ -43,11 +52,11 @@ export async function listClasses(
   return rows.map((c) => ({
     class_id: c.class_id,
     name: c.name,
-    archived_at: c.archived_at?.toISOString() ?? null,
+    archived_at: isoOrNull(c.archived_at),
     seat_version: c.seat_version,
     active_student_count: c.active_student_count,
     current_term_id: current?.term_id ?? null,
-    created_at: c.created_at.toISOString(),
+    created_at: iso(c.created_at),
   }));
 }
 
@@ -83,7 +92,7 @@ export async function createClass(
       seat_version: cls.seat_version,
       active_student_count: 0,
       current_term_id: current?.term_id ?? null,
-      created_at: cls.created_at.toISOString(),
+      created_at: iso(cls.created_at),
     };
   });
 }
@@ -123,11 +132,11 @@ export async function patchClass(
     return {
       class_id: after.class_id,
       name: after.name,
-      archived_at: after.archived_at?.toISOString() ?? null,
+      archived_at: isoOrNull(after.archived_at),
       seat_version: after.seat_version,
       active_student_count: count[0]?.cnt ?? 0,
       current_term_id: current?.term_id ?? null,
-      created_at: after.created_at.toISOString(),
+      created_at: iso(after.created_at),
     };
   });
 }
@@ -143,8 +152,8 @@ export async function listTerms(db: Db = defaultDb): Promise<TermDto[]> {
     name: t.name,
     status: t.status,
     is_current: t.is_current,
-    started_at: t.started_at.toISOString(),
-    closed_at: t.closed_at?.toISOString() ?? null,
+    started_at: iso(t.started_at),
+    closed_at: isoOrNull(t.closed_at),
   }));
 }
 
@@ -170,7 +179,7 @@ export async function createTerm(
       name: term.name,
       status: term.status,
       is_current: term.is_current,
-      started_at: term.started_at.toISOString(),
+      started_at: iso(term.started_at),
       closed_at: null,
     };
   });
@@ -241,8 +250,8 @@ export async function activateTerm(
         name: term.name,
         status: term.status,
         is_current: term.is_current,
-        started_at: term.started_at.toISOString(),
-        closed_at: term.closed_at?.toISOString() ?? null,
+        started_at: iso(term.started_at),
+        closed_at: isoOrNull(term.closed_at),
       },
       initialized_students: initialized,
       closed_terms: closedRow.length,
@@ -285,8 +294,8 @@ export async function termSummary(
       name: term.name,
       status: term.status,
       is_current: term.is_current,
-      started_at: term.started_at.toISOString(),
-      closed_at: term.closed_at?.toISOString() ?? null,
+      started_at: iso(term.started_at),
+      closed_at: isoOrNull(term.closed_at),
     },
     ...r,
   };
