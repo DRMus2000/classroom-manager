@@ -18,6 +18,7 @@ import * as pointsRepo from '../src/repo/points.js';
 import { cleanupExpiredIdempotency } from '../src/services/idempotency.js';
 import { writeDueCheckpoints } from '../src/services/replay.js';
 import { dumpWithPgDump, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
+import { reapplyAnonLedger, retryFailedLedgerExports } from '../src/services/anonMaintenance.js';
 import { hashPassword } from '../src/lib/crypto.js';
 
 /** 交互式读取隐藏输入（不回显）。 */
@@ -222,6 +223,29 @@ async function backup(): Promise<void> {
   console.log(`✓ 备份完成：${result.file_name}，清理 ${result.removed.length} 个过期文件`);
 }
 
+async function anonLedgerRetry(): Promise<void> {
+  const result = await retryFailedLedgerExports();
+  if (result.failed > 0) {
+    console.error(`匿名账本重试：导出 ${result.exported} 条，失败 ${result.failed} 条`);
+    for (const item of result.errors) console.error(`  ${item.anon_id}  ${item.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`✓ 匿名账本重试：导出 ${result.exported} 条`);
+}
+
+async function anonReapply(args: Record<string, string>): Promise<void> {
+  const confirm = args['confirm'] === 'true';
+  const result = await reapplyAnonLedger(confirm);
+  if (!confirm) {
+    console.log(`待补做 ${result.pending} 条，已完成 ${result.already} 条，库中无此人 ${result.missing} 条。`);
+    console.log('确认后执行：anon-reapply --confirm');
+    if (result.pending > 0) process.exitCode = 2;
+    return;
+  }
+  console.log(`✓ 已补做 ${result.applied} 条，原本已匿名 ${result.already} 条，库中无此人 ${result.missing} 条。`);
+}
+
 async function anonExportStatus(): Promise<void> {
   const rows = await db.execute<{
     anon_id: string;
@@ -246,7 +270,7 @@ async function anonExportStatus(): Promise<void> {
   for (const r of rows) {
     console.warn(`  ${r.anon_id}  [${r.state}]  尝试 ${r.attempts} 次  ${r.last_error ?? ''}`);
   }
-  console.warn('\n请检查 /app/anon-ledger 目录写入权限与磁盘空间，然后重试。');
+  console.warn('\n请检查匿名账本目录写入权限与磁盘空间，然后执行 anon-ledger-retry。');
   process.exitCode = 2;
 }
 
@@ -260,6 +284,8 @@ const COMMANDS: Record<string, (args: Record<string, string>) => Promise<void>> 
   'anon-export-status': anonExportStatus,
   checkpoint,
   backup,
+  'anon-ledger-retry': anonLedgerRetry,
+  'anon-reapply': anonReapply,
 };
 
 async function main(): Promise<void> {
@@ -275,6 +301,8 @@ async function main(): Promise<void> {
     console.log('  anon-export-status                        查看匿名化账本导出状态');
     console.log('  checkpoint [--daily]                     写入到期回放检查点');
     console.log('  backup                                    执行 pg_dump 并记录结果');
+    console.log('  anon-ledger-retry                         重试未导出的匿名账本');
+    console.log('  anon-reapply [--confirm]                  恢复旧备份后补做匿名化');
     process.exit(cmd ? 1 : 0);
   }
 
