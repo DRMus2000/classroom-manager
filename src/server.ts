@@ -22,6 +22,7 @@ import * as seatService from './services/seats.js';
 import * as pointsService from './services/points.js';
 import * as markService from './services/marks.js';
 import * as auditService from './services/audit.js';
+import * as dutyService from './services/duty.js';
 import * as importService from './services/imports.js';
 import {
   MAX_IMPORT_BYTES,
@@ -39,6 +40,13 @@ import {
   applyLayoutChangeInput,
   changePasswordInput,
   createBatchInput,
+  dutyAbsentInput,
+  dutyAttendanceInput,
+  dutyCorrectInput,
+  dutyFreezeInput,
+  dutyNoPushInput,
+  dutySelectionInput,
+  dutyVersionInput,
   createClassInput,
   anonymizeClassInput,
   anonymizeStudentInput,
@@ -523,6 +531,87 @@ export async function buildServer() {
     await requireUser(request);
     const query = parse<ReturnType<typeof listEntriesQuery.parse>>(listEntriesQuery, request.query);
     return pointsService.listTimeline(query);
+  });
+
+  app.get('/api/v1/classes/:id/duty', async (request) => {
+    await requireUser(request);
+    return dutyService.getClassDuty(routeId(request));
+  });
+
+  app.post('/api/v1/classes/:id/duty/rounds', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
+    return dutyService.startRound(user.teacher_id, routeId(request), body.request_id);
+  });
+
+  app.get('/api/v1/duty/rounds/:id', async (request) => {
+    await requireUser(request);
+    return dutyService.getRound(routeId(request));
+  });
+
+  app.post('/api/v1/duty/rounds/:id/attendance', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyAttendanceInput.parse>>(dutyAttendanceInput, request.body);
+    return dutyService.markAttendance(user.teacher_id, routeId(request), body.duty_term_ids, body.expected_version, body.request_id);
+  });
+
+  app.post('/api/v1/duty/rounds/:id/no-push', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyNoPushInput.parse>>(dutyNoPushInput, request.body);
+    return dutyService.markNoPush(user.teacher_id, routeId(request), body.student_ids, body.expected_version, body.request_id);
+  });
+
+  app.post('/api/v1/duty/rounds/:id/absent-confirmed', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyAbsentInput.parse>>(dutyAbsentInput, request.body);
+    return dutyService.confirmAbsent(user.teacher_id, routeId(request), body.duty_term_id, body.expected_version, body.request_id);
+  });
+
+  app.post('/api/v1/duty/rounds/:id/candidates/freeze', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
+    return dutyService.freezeCandidates(user.teacher_id, routeId(request), body.request_id);
+  });
+
+  app.post('/api/v1/duty/rounds/:id/selections', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutySelectionInput.parse>>(dutySelectionInput, request.body);
+    return dutyService.drawSelection(user.teacher_id, routeId(request), body.student_id, body.expected_version, body.request_id);
+  });
+
+  app.get('/api/v1/duty/selections/:id', async (request) => {
+    await requireUser(request);
+    return dutyService.getSelection(routeId(request));
+  });
+
+  app.post('/api/v1/duty/selections/:id/cancel', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
+    return dutyService.cancelSelection(user.teacher_id, routeId(request), body.request_id);
+  });
+
+  app.post('/api/v1/duty/selections/:id/reopen', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
+    return dutyService.reopenSelection(user.teacher_id, routeId(request), body.request_id);
+  });
+
+  app.post('/api/v1/duty/selections/:id/confirm', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyFreezeInput.parse>>(dutyFreezeInput, request.body);
+    return dutyService.confirmSelection(user.teacher_id, routeId(request), body.request_id);
+  });
+
+  app.post('/api/v1/duty/terms/:id/correct', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyCorrectInput.parse>>(dutyCorrectInput, request.body);
+    return dutyService.correctTerm(user.teacher_id, routeId(request), body);
+  });
+
+  app.post('/api/v1/duty/rounds/:id/close', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof dutyVersionInput.parse>>(dutyVersionInput, request.body);
+    return dutyService.closeRound(user.teacher_id, routeId(request), body.expected_version, body.request_id);
   });
 
   app.get('/api/v1/events', async (request, reply: FastifyReply) => {

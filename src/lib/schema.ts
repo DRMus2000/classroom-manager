@@ -685,6 +685,38 @@ export const markAssignInput = z.object({
 });
 export type MarkAssignInput = z.infer<typeof markAssignInput>;
 
+export const dutyVersionInput = z.object({
+  request_id: requestId,
+  expected_version: expectedVersion,
+});
+
+export const dutyAttendanceInput = dutyVersionInput.extend({
+  duty_term_ids: z.array(uuid).min(1),
+});
+
+export const dutyNoPushInput = dutyVersionInput.extend({
+  student_ids: z.array(uuid).min(1),
+});
+
+export const dutyAbsentInput = dutyVersionInput.extend({
+  duty_term_id: uuid,
+});
+
+export const dutySelectionInput = dutyVersionInput.extend({
+  student_id: uuid,
+});
+
+export const dutyFreezeInput = z.object({
+  request_id: requestId,
+});
+
+export const dutyCorrectInput = dutyVersionInput.extend({
+  action: z.enum(['release', 'restore', 'adjust_count']),
+  note: z.string().min(1).max(500),
+  completed_count: z.number().int().nonnegative().optional(),
+  required_count: z.number().int().positive().optional(),
+});
+
 /* ------------------------------------------------------------------ */
 /* 导入（第一阶段）                                                    */
 /* ------------------------------------------------------------------ */
