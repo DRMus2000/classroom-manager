@@ -527,6 +527,24 @@ export async function buildServer() {
     );
   });
 
+  app.get('/api/v1/leaderboard', async (request) => {
+    await requireUser(request);
+    const query = parse<{ term_id: string; class_id?: string }>(
+      z.object({
+        term_id: uuid,
+        class_id: z.string().optional(),
+      }),
+      request.query,
+    );
+    const classId = !query.class_id || query.class_id === 'all' ? undefined : query.class_id;
+    if (classId && !uuid.safeParse(classId).success) {
+      throw new AppError('VALIDATION_FAILED', '请求参数不正确', {
+        issues: [{ path: ['class_id'], message: '必须是 UUID 或 all' }],
+      });
+    }
+    return { items: await pointsService.listLeaderboard(query.term_id, classId) };
+  });
+
   app.get('/api/v1/points/entries', async (request) => {
     await requireUser(request);
     const query = parse<ReturnType<typeof listEntriesQuery.parse>>(listEntriesQuery, request.query);
