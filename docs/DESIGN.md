@@ -12,7 +12,8 @@
 | `docs/DEVIATIONS.md` | 本文与当前代码、迁移的差异 |
 | `需求文档.md` | 需求基线 v1.0 |
 | `migrations/001_phase1_core.sql` | 第一阶段表 |
-| `migrations/002_phase2_duty_marks.sql` | 第二阶段表；卫生轮次还需本文 §4.3 的列与约束 |
+| `migrations/002_phase2_duty_marks.sql` | 第二阶段卫生轮次、普通标记、点名与倒计时表 |
+| `migrations/003_term_open_return_new.sql` | 已发布迁移后的学期触发器修正 |
 
 ## 0. 已确认决定
 
@@ -83,9 +84,9 @@ graph TB
 | 层 | 职责 |
 |---|---|
 | `src/domain` | 无 I/O。编号、换座、积分可撤销性、卫生候选资格 |
-| `src/repo` | SQL |
-| `src/services` | 事务、幂等、审计、发事件 |
-| `src/routes` | HTTP。当前仓库里这一层还不存在 |
+| `src/repo` | SQL。事件行只写入 `event_log` |
+| `src/services` | 事务、幂等、审计，并在提交后登记 SSE |
+| `src/server.ts` | Fastify HTTP 路由、Cookie 与 Zod 入参解析 |
 | `web` | 草稿和动画留在浏览器；提交结果以服务端为准 |
 
 三层正交数据：
@@ -139,7 +140,7 @@ for col in columns:
 | ③ | 13 | toward_back | right | 29–41 | 29 |
 | ④ | 13 | toward_front | left | 42–54 | 54 |
 
-`001` 的列种子已经是这组 `direction` / `facing`。迁移不写 `seat_number`，要由符合本节的函数回填。
+`001` 的列种子已经是这组 `direction` / `facing`。迁移不写 `seat_number`；当前 `scripts/migrate.ts` 在 `migrate up` 后调用符合本节的函数自动回填。
 
 在③列、④列的后墙端各插入一座之后：
 

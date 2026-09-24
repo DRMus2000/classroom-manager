@@ -17,7 +17,7 @@ import * as authRepo from '../src/repo/auth.js';
 import * as pointsRepo from '../src/repo/points.js';
 import { cleanupExpiredIdempotency } from '../src/services/idempotency.js';
 import { writeDueCheckpoints } from '../src/services/replay.js';
-import { dumpWithPgDump, measureDiskFree, redactSecrets, resolveRetentionDays, runDailyBackup } from '../src/services/backup.js';
+import { assertRestoreTarget, dumpWithPgDump, measureDiskFree, openBackupDownload, redactSecrets, resolveRetentionDays, restoreWithPgRestore, runDailyBackup } from '../src/services/backup.js';
 import { reapplyAnonLedger, retryFailedLedgerExports } from '../src/services/anonMaintenance.js';
 import { hashPassword } from '../src/lib/crypto.js';
 
@@ -224,6 +224,19 @@ async function backup(): Promise<void> {
   console.log(`✓ 备份完成：${result.file_name}，清理 ${result.removed.length} 个过期文件`);
 }
 
+async function restore(args: Record<string, string>): Promise<void> {
+  const live = process.env.DATABASE_URL;
+  const target = args['target'];
+  const backupId = args['backup'];
+  if (!live || !target || !backupId || args['confirm'] !== 'true') {
+    throw new Error('用法：restore --backup <backup_id> --target <postgres-url> --confirm');
+  }
+  assertRestoreTarget(live, target);
+  const file = await openBackupDownload(backupId);
+  await restoreWithPgRestore(target, file.path);
+  console.log(`✓ 已恢复 ${file.file_name} 到目标库。重新开放前请执行 anon-reapply。`);
+}
+
 async function anonLedgerRetry(): Promise<void> {
   const result = await retryFailedLedgerExports();
   if (result.failed > 0) {
@@ -291,6 +304,7 @@ const COMMANDS: Record<string, (args: Record<string, string>) => Promise<void>> 
   'anon-export-status': anonExportStatus,
   checkpoint,
   backup,
+  restore,
   'anon-ledger-retry': anonLedgerRetry,
   'anon-reapply': anonReapply,
 };
@@ -308,6 +322,8 @@ async function main(): Promise<void> {
     console.log('  anon-export-status                        查看匿名化账本导出状态');
     console.log('  checkpoint [--daily]                     写入到期回放检查点');
     console.log('  backup                                    执行 pg_dump 并记录结果');
+    console.log('  restore --backup <id> --target <url> --confirm');
+    console.log('                                            恢复到另一数据库，不能指向当前库');
     console.log('  anon-ledger-retry                         重试未导出的匿名账本');
     console.log('  anon-reapply [--confirm]                  恢复旧备份后补做匿名化');
     process.exit(cmd ? 1 : 0);

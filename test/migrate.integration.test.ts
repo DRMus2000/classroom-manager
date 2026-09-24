@@ -184,7 +184,7 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
       );
       assert.deepEqual(
         applied.rows.map((row) => row.filename),
-        ['001_phase1_core.sql', '002_phase2_duty_marks.sql', '003_term_open_return_new.sql'],
+        ['001_phase1_core.sql', '002_phase2_duty_marks.sql', '003_term_open_return_new.sql', '004_point_batch_note.sql'],
       );
 
       const cls = await check.query<{ class_id: string }>(

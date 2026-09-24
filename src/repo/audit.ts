@@ -7,8 +7,6 @@
  */
 
 import { sql, type Db, type Tx, now } from './db.js';
-import { afterCommit } from './afterCommit.js';
-import { publishEvent } from '../events/broadcaster.js';
 import { REPLAY_RELEVANT_KINDS, type EventKind } from '../lib/schema.js';
 
 export interface AuditRow {
@@ -73,9 +71,7 @@ export async function writeEvent(
         VALUES (${input.class_id}, ${input.kind}, ${JSON.stringify(input.payload)}, ${replayRelevant})
         RETURNING event_seq, class_id, kind, payload, replay_relevant, occurred_at`,
   );
-  const row = rows[0]!;
-  afterCommit(() => publishEvent(row));
-  return row;
+  return rows[0]!;
 }
 
 /** 查询审计（分页）。 */
@@ -246,6 +242,14 @@ export interface BackupRow {
   error: string | null;
   started_at: Date;
   finished_at: Date | null;
+}
+
+export async function findBackup(db: Db | Tx, backupId: string): Promise<BackupRow | null> {
+  const rows = await db.execute<BackupRow>(
+    sql`SELECT backup_id, file_name, size_bytes, disk_free_bytes, status, error, started_at, finished_at
+        FROM backup_record WHERE backup_id = ${backupId}`,
+  );
+  return rows[0] ?? null;
 }
 
 export async function listBackups(db: Db | Tx, limit = 50): Promise<BackupRow[]> {

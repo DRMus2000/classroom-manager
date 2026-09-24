@@ -10,6 +10,7 @@
 import { type Db, db as defaultDb, sql } from '../repo/db.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import { toIsoTimestamp } from '../lib/time.js';
@@ -78,7 +79,7 @@ export async function createClass(
       request_id: input.request_id,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: cls.class_id,
       kind: 'roster_changed',
       payload: { class_id: cls.class_id, action: 'class_created' },
@@ -235,7 +236,7 @@ export async function activateTerm(
       request_id: input.request_id,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: null, // 全局事件：所有班级同时进入新学期
       kind: 'term_switched',
       payload: {

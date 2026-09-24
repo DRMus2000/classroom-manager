@@ -13,6 +13,7 @@ import * as pointsRepo from '../repo/points.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { idempotentTx } from './idempotency.js';
 import { assignRanks, canReverseBatch, canReverseEntry, validateDeltaPolarity } from '../domain/points.js';
 import { AppError, Errors } from '../lib/errors.js';
@@ -64,6 +65,10 @@ export async function createBatch(
         if (input.template_id) {
           const tpl = await pointsRepo.findTemplate(tx, input.template_id);
           if (!tpl) throw Errors.notFound('原因模板', input.template_id);
+          const visible = (await listEffectiveTemplates(input.class_id, tx)).find(
+            (item) => item.template_id === input.template_id && !item.hidden,
+          );
+          if (!visible) throw Errors.forbidden('该原因模板在本班不可用或已隐藏');
 
           const overrides = await pointsRepo.listClassOverrides(tx, input.class_id);
           const ov = overrides.find((o) => o.template_id === input.template_id);
@@ -115,6 +120,7 @@ export async function createBatch(
           kind: 'score',
           teacher_id: actorId,
           request_id: input.request_id,
+          note: input.note?.trim() ? input.note.trim() : null,
         });
 
         // 6. 逐条写入明细（含座位快照）+ 更新余额
@@ -164,17 +170,19 @@ export async function createBatch(
             delta: input.delta,
             member_count: studentIds.length,
             template_id: input.template_id,
+            note: batch.note,
           },
           request_id: input.request_id,
         });
 
-        const scoredEvent = await auditRepo.writeEvent(tx, {
+        const scoredEvent = await writeEvent(tx, {
           class_id: input.class_id,
           kind: 'points_appended',
           payload: {
             class_id: input.class_id,
             term_id: input.term_id,
             batch_id: batch.batch_id,
+            note: batch.note,
             entries: entries.map((e) => ({
               entry_id: e.entry_id,
               student_id: e.student_id,
@@ -335,7 +343,7 @@ export async function reverseBatch(
           request_id: requestId,
         });
 
-        const reversedEvent = await auditRepo.writeEvent(tx, {
+        const reversedEvent = await writeEvent(tx, {
           class_id: batch.class_id,
           kind: 'points_appended',
           payload: {
@@ -458,7 +466,7 @@ export async function reverseEntry(
           request_id: requestId,
         });
 
-        const entryEvent = await auditRepo.writeEvent(tx, {
+        const entryEvent = await writeEvent(tx, {
           class_id: entry.class_id_snapshot,
           kind: 'points_appended',
           payload: {
@@ -556,22 +564,22 @@ export async function listTimeline(
 ): Promise<{ items: TimelineEventDto[]; next_cursor: string | null }> {
   const limit = q.limit ?? 50;
   const filter = entryFilterFromQuery(q);
-  const rows = await pointsRepo.listEntries(db, { ...filter, limit: limit + 1 });
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
-  const grouped = await pointsRepo.listTimeline(db, { ...filter, limit });
+  const grouped = await pointsRepo.listTimeline(db, { ...filter, limit: limit + 1 });
+  const hasMore = grouped.length > limit;
+  const page = hasMore ? grouped.slice(0, limit) : grouped;
   const last = page[page.length - 1];
   return {
-    items: grouped.map((row) => ({
+    items: page.map((row) => ({
       batch_id: row.batch_id,
       occurred_at: toIsoTimestamp(row.occurred_at),
       delta_value: row.delta_value,
       member_count: row.member_count,
       kind: row.kind,
+      note: row.note,
       reason_snapshot: row.reason_snapshot as TimelineEventDto['reason_snapshot'],
       entries: row.entries,
     })),
-    next_cursor: hasMore && last ? String(Number(last.seq)) : null,
+    next_cursor: hasMore && last ? String(last.max_seq) : null,
   };
 }
 
@@ -610,6 +618,20 @@ export async function getStudentTimeline(
     },
     balance: balance?.balance ?? 0,
     events,
+  };
+}
+
+export async function getStudentBalance(studentId: string, termId?: string, db: Db = defaultDb) {
+  const student = await studentRepo.findStudent(db, studentId);
+  if (!student) throw Errors.notFound('学生', studentId);
+  const term = termId ? await classRepo.findTerm(db, termId) : await classRepo.currentTerm(db);
+  if (!term) throw Errors.notFound('学期');
+  const balance = await pointsRepo.findBalance(db, term.term_id, studentId);
+  return {
+    student_id: studentId,
+    term_id: term.term_id,
+    balance: balance?.balance ?? 0,
+    last_change_seq: balance?.last_change_seq ?? 0,
   };
 }
 

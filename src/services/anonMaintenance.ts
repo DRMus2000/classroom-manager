@@ -5,6 +5,7 @@
 
 import { sql, withTx, type Db, db as defaultDb } from '../repo/db.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { appendAnonLedgerEntry, readLedger, type AnonLedgerEntry } from './anonLedger.js';
 
 export interface LedgerRetryResult {
@@ -130,7 +131,7 @@ export async function reapplyAnonLedger(confirm: boolean, db: Db = defaultDb): P
         before: { process_version: entry.process_version },
         after: { status: 'anonymized', anon_code: entry.anon_code },
       });
-      await auditRepo.writeEvent(tx, {
+      await writeEvent(tx, {
         class_id: entry.class_id,
         kind: 'roster_changed',
         payload: {

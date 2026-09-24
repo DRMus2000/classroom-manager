@@ -1,5 +1,5 @@
 /**
- * 匿名化写入外部账本。账本失败时学生身份保持原样，同一 request_id 可以在修好之后重试。
+ * 匿名化先提交库内意图。账本写入失败时身份已经清空且导出保持 pending，同一 request_id 修好后可以补写账本。
  */
 
 import assert from 'node:assert/strict';
@@ -80,7 +80,12 @@ describe('anonymize rolls back when the ledger fails', { timeout: 180_000 }, () 
           return true;
         },
       );
-      assert.deepEqual(await namesOf(client, [zhang]), ['张三']);
+      assert.deepEqual(await namesOf(client, [zhang]), ['']);
+      const pending = await client.query<{ state: string }>(
+        `SELECT e.state FROM anon_ledger_export e JOIN anon_registry r ON r.anon_id = e.anon_id WHERE r.student_id = $1`,
+        [zhang],
+      );
+      assert.equal(pending.rows[0]?.state, 'pending');
       process.env['ANON_LEDGER_KEY'] = KEY;
       assert.equal((await readLedger()).length, 0);
 

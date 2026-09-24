@@ -1,13 +1,13 @@
 # 实施计划
 
-依据是 `docs/DESIGN.md`、`docs/SCHEMA.md`、`docs/API.md`。已在仓库里落地的步骤标为完成。下一轮从第一个未勾选项开始，不跳着做后面的接口。
+依据是 `docs/DESIGN.md`、`docs/SCHEMA.md`、`docs/API.md`。下面的勾选表示已有代码路径，不等于生产验收通过。下一轮应先处理 `docs/audits/2026-09-25-codebase-audit.md` 的高风险项，再执行部署和恢复演练。
 
 ## 1. 脚手架与基础配置
 
 - [x] Node 22 + TypeScript + Fastify 后端工程，以及 React 18 + Vite 前端工程骨架
 - [x] Docker Compose（nginx、api、postgres）、Nginx、`.env.example`、`.gitignore`
 - [x] 固定 Drizzle 与 `db.execute` 的返回类型，使 `npm run typecheck` 能通过
-- [x] 在 PostgreSQL 16 上执行 `001`、`002`，确认迁移可重复执行且种子列方向与 `docs/SCHEMA.md` 一致
+- [x] 在 PostgreSQL 16 上执行 `001`、`002`、`003`，确认迁移可重复执行且种子列方向与 `docs/SCHEMA.md` 一致
 - [x] 迁移之后调用符合规范的 `renumerate()`，把初始 54 座回填为 1–54
 
 ## 2. 数据模型与迁移
@@ -60,4 +60,13 @@
 - [x] 重复 `request_id` 不重复记分；部分撤销后再整批撤销只冲销剩余明细
 - [x] 换座版本过期返回 409，不覆盖另一台设备的座次
 - [x] 卫生：取消预览不重抽、双设备重复确认、新任者不进本轮候选
-- [x] 在测试库上跑通 `001` 和 `002` 后再做上述集成测试
+- [x] 在测试库上跑通 `001`、`002`、`003` 后再做上述集成测试
+
+## 7. 上线前未完成项
+
+- [x] 修复 Docker 构建与 Compose 凭据、HTTPS 和代理配置
+- [x] 接通可写备份卷、`pg_dump`、每日 02:15 调度、下载和指向其他库的 `restore`
+- [x] 匿名化改为先提交意图再写账本；导入预览过期时释放解析结果；记分校验班内模板
+- [x] 记分批次保存 `note`，并进入时间线、导出和回放事件
+- [x] 补上纯函数故障顺序、Cookie、代理和路由清单测试，以及 GitHub Actions
+- [ ] 在目标机器上用真实证书和一份 dump 做一次恢复演练后再录入真实学生数据

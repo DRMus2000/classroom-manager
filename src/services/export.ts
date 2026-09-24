@@ -84,6 +84,7 @@ export async function exportPoints(query: ListEntriesQuery, db: Db = defaultDb):
         entry.status,
         entry.seat_number_snapshot == null ? null : Number(entry.seat_number_snapshot),
         reasonName(entry.reason_snapshot),
+        entry.note ?? '',
       ]);
     }
     if (rows.length > EXPORT_CAP) throw Errors.forbidden('导出结果超过 20000 行，请缩小筛选范围');
@@ -94,7 +95,7 @@ export async function exportPoints(query: ListEntriesQuery, db: Db = defaultDb):
   }
   const body = await workbook(
     '积分明细',
-    ['序号', '时间', '姓名', '分值', '余额', '状态', '座位号', '原因'],
+    ['序号', '时间', '姓名', '分值', '余额', '状态', '座位号', '原因', '备注'],
     rows,
   );
   return { filename: '积分明细.xlsx', body };

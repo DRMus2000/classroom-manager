@@ -7,20 +7,19 @@ services:
     environment:
       POSTGRES_DB: classroom_manager
       POSTGRES_USER: classroom
-      POSTGRES_PASSWORD: classroom_password  # 生产环境改为强密码
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - classroom_net
-    # 【关键】：不发布宿主机端口，数据库无公网路径
     expose:
       - "5432"
     restart: unless-stopped
     command:
       - "postgres"
       - "-c"
-      - "shared_buffers=512MB"        # 2C4G 单机适配
+      - "shared_buffers=512MB"
       - "-c"
       - "max_connections=50"
       - "-c"
@@ -42,18 +41,19 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://classroom:classroom_password@postgres:5432/classroom_manager
-      SESSION_SECRET: ${SESSION_SECRET:-CHANGE_ME_IN_PRODUCTION_32_BYTES_MIN}
+      DATABASE_URL: postgresql://classroom:${POSTGRES_PASSWORD}@postgres:5432/classroom_manager
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
       API_PORT: 3000
       TZ: Asia/Shanghai
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
       REPLAY_CHECKPOINT_EVENT_THRESHOLD: ${REPLAY_CHECKPOINT_EVENT_THRESHOLD:-200}
-      ANON_LEDGER_KEY: ${ANON_LEDGER_KEY}
+      ANON_LEDGER_KEY: ${ANON_LEDGER_KEY:?set ANON_LEDGER_KEY}
+      HTTPS_ENABLED: ${HTTPS_ENABLED:-true}
+      TRUST_PROXY: "1"
+      BACKUP_DIR: /app/backups
     volumes:
-      # 备份目录只读挂载（删除由宿主机 cron 轮转）
       - backups:/app/backups:ro
-      # 匿名化外部账本（必须独立于数据库备份，写入由应用负责）
       - anon_ledger:/app/anon-ledger
     networks:
       - classroom_net
@@ -67,6 +67,26 @@ services:
       retries: 3
       start_period: 40s
 
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: classroom_backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://classroom:${POSTGRES_PASSWORD}@postgres:5432/classroom_manager
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      TZ: Asia/Shanghai
+    volumes:
+      - backups:/backups
+    networks:
+      - classroom_net
+    restart: unless-stopped
+    command: ["node", "dist/scripts/backup-scheduler.js"]
+
   nginx:
     image: nginx:alpine
     container_name: classroom_nginx
@@ -77,12 +97,13 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./web/dist:/usr/share/nginx/html:ro   # 前端静态资源（构建后）
-      # HTTPS 证书（生产环境启用）
-      # - ./certs:/etc/nginx/certs:ro
+      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
+      - ./web/dist:/usr/share/nginx/html:ro
+      - ./certs:/etc/nginx/certs
     networks:
       - classroom_net
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
 volumes:
   pgdata:

@@ -18,11 +18,13 @@ import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { Errors } from '../lib/errors.js';
 import { withIdempotency } from './idempotency.js';
 import { readCellText } from './importTemplate.js';
 import { createHash } from 'node:crypto';
 import type { ImportIssue, ImportChange, ImportPreviewDto, ImportTemplateKind } from '../lib/schema.js';
+import { dropExpiredKeys } from '../lib/previewCache.js';
 
 const PREVIEW_TTL_MS = 15 * 60 * 1000; // 15 分钟
 
@@ -53,10 +55,7 @@ interface PreviewPayload {
 const previews = new Map<string, PreviewPayload>();
 
 function cleanupPreviews(): void {
-  const now = Date.now();
-  for (const [k, v] of previews) {
-    if (v.expiresAt < now) previews.delete(k);
-  }
+  dropExpiredKeys(Date.now(), previews, payloadChangeSets);
 }
 
 /* ------------------------------------------------------------------ */
@@ -626,7 +625,7 @@ export async function commitImport(
       request_id: requestId,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: classId,
       kind: 'roster_changed',
       payload: {

@@ -4,7 +4,7 @@
 
 ## 核心特性
 
-**第一阶段（领域规则与主要 HTTP 入口已按设计接上，页面仍未做）**
+**第一阶段（后端接口和主要页面已实现；生产部署仍有阻断项）**
 - 单账号登录 + 改密 + 踢出其他设备
 - 班级与学期管理（全局切换、旧学期只读）
 - 名单导入（双模板：行表 / 平面座位表）+ 冲突检测 + 整体提交
@@ -14,9 +14,9 @@
 - 幂等保证（`request_id` 全局唯一 + 双击防抖）
 - 多端同步（SSE + 事件序号断线续传 + 版本冲突提示）
 - 审计日志（所有管理状态变更同事务写入）
-- 备份记录（每日 pg_dump + 30 天轮转 + 磁盘监测）
+- 备份任务与记录（`pg_dump` + 30 天轮转 + 磁盘监测；每日执行需外部调度）
 
-**第二阶段（设计已定，见 `docs/DESIGN.md`，待实施）**
+**第二阶段（主要业务接口与页面已实现；验收与部署仍需完善）**
 - 普通标记 + 卫生管理员（轮次状态机 + 冻结候选 + 不放回随机替补）
 - 排行榜（同分并列 + 破并列：最近一次达到当前分数时间）
 - 动态回放（横向柱状竞赛 + 累计/净增减 + 检查点 + 拖动）
@@ -25,11 +25,11 @@
 
 ## 技术栈
 
-- **前端**：React 18 + TS + Vite；TanStack Query + Zustand；响应式布局，微信内置浏览器兼容
-- **后端**：Node 22 + Fastify + Zod（→ OpenAPI）；Drizzle ORM + 手写迁移；Argon2id 密码哈希
-- **数据库**：PostgreSQL 16；事务 + 唯一约束保证一致性；LISTEN/NOTIFY 辅助多端同步
+- **前端**：React 18 + TS + Vite。数据获取和状态由本地 Hook 管理
+- **后端**：Node 22 + Fastify + Zod；Drizzle 数据库连接与手写 SQL/迁移；Argon2id 密码哈希
+- **数据库**：PostgreSQL 16；事务 + 唯一约束保证一致性；事件先写 `event_log`，由服务层在提交后广播
 - **实时推送**：SSE（text/event-stream）+ Last-Event-ID 断线重连
-- **部署**：Docker Compose（nginx + api + postgres）；2C4G 单机适配；数据库不暴露公网
+- **部署**：Docker Compose（nginx + api + backup + postgres）。见 `docs/DEPLOY.md`
 
 ## 设计原则（贯穿全系统的 12 条公理）
 
@@ -52,9 +52,9 @@
 
 ```bash
 # 安装依赖
-npm install
+npm ci
 
-# 复制环境变量模板并填写（数据库连接 + SESSION_SECRET）
+# 复制环境变量模板并填写（本地开发须把 DATABASE_URL 的主机改成 localhost）
 cp .env.example .env
 
 # 启动 PostgreSQL（本地或 Docker）
@@ -64,55 +64,48 @@ docker run -d --name classroom_db \
   -e POSTGRES_PASSWORD=YOUR_PASSWORD \
   -p 5432:5432 postgres:16-alpine
 
-# 执行迁移
+# 将 .env 中的变量导入当前终端后执行迁移；Node 脚本不会自动读取 .env
+set -a; . ./.env; set +a
 npm run migrate up
 
 # 启动开发服务器
 npm run dev
 
 # 前端开发（另一终端）
-cd web && npm install && npm run dev
+cd web && npm ci && npm run dev
 ```
 
 访问 `http://localhost:3000` （API）和 `http://localhost:5173`（前端）。
 
+在 PowerShell 中，先将本地连接信息设为进程环境变量（例如 `$env:DATABASE_URL = 'postgresql://classroom:YOUR_PASSWORD@localhost:5432/classroom_manager'`），再运行迁移与后端命令；Node 不会自动读取 `.env`。需要测试匿名化时还须设置有效的 `ANON_LEDGER_KEY` 和可写的 `ANON_LEDGER_PATH`。
+
 ### 生产部署
 
-设计正文见 `docs/DESIGN.md`，接口见 `docs/API.md`，部署见 `docs/DEPLOY.md`，与代码的差异见 `docs/DEVIATIONS.md`。部署核心步骤：
-
-1. 准备 Ubuntu 云服务器（2C4G+，Docker + Docker Compose）
-2. 克隆仓库 + 复制 `.env.example` 为 `.env` 并填写强密码
-3. 构建前端：`cd web && npm run build`
-4. 启动容器：`docker-compose up -d`
-5. 执行迁移：`docker-compose exec api node dist/scripts/migrate.js up`
-6. 创建教师账号：`docker-compose exec api node dist/cli/index.js create-teacher`
-7. 配置宿主机 cron 每日备份：`17 2 * * * docker-compose exec postgres pg_dump ...`
-8. 试运行阶段仅用测试数据；配置 HTTPS 后再录入真实学生信息
+设计正文见 `docs/DESIGN.md`，接口见 `docs/API.md`，部署见 `docs/DEPLOY.md`，与代码的差异见 `docs/DEVIATIONS.md`。生产使用 `docker compose up -d --build`。真实学生信息仍须等可信证书和一次恢复演练通过后再录入。
 
 ## 项目结构
 
 ```
 classroom-manager/
-├── migrations/          # SQL 迁移（001 第一阶段、002 第二阶段）
+├── migrations/          # SQL 迁移（001 核心、002 卫生与标记、003 触发器修正）
 ├── src/
-│   ├── domain/         # 纯领域逻辑（renumerate, planSwap, points）
+│   ├── domain/         # 纯领域逻辑（renumber、seatMove、points 等）
 │   ├── lib/            # schema.ts（Zod 契约层）、crypto.ts、errors.ts
-│   ├── repo/           # 数据访问层（Drizzle）
+│   ├── repo/           # 数据访问层（Drizzle 连接 + 手写 SQL）
 │   ├── services/       # 业务编排（事务边界在此）
-│   ├── routes/         # Fastify 路由
 │   ├── events/         # SSE 广播器
-│   └── server.ts       # 应用入口
-├── scripts/            # 运维脚本（checkpoint, backup, anon-ledger）
-├── cli/                # 维护命令（create-teacher, reset-password, recompute-balance）
+│   └── server.ts       # 应用入口与 Fastify 路由
+├── scripts/            # 迁移、检查点、备份脚本
+├── cli/                # 账号、余额、检查点、备份和匿名化维护命令
 ├── web/                # React 前端（独立子项目）
 ├── docs/               # DESIGN, SCHEMA, API, DEPLOY, DEVIATIONS
-├── docker-compose.yml  # 三容器编排（nginx + api + postgres）
+├── docker-compose.yml  # nginx + api + backup + postgres
 └── nginx.conf          # 反向代理 + SSE 调优
 ```
 
 ## 关键接口
 
-完整 API 参考见 `docs/API.md` 与 `/api/v1/openapi.json`（由 Zod 生成）。
+当前 HTTP 接口见 `docs/API.md`。仓库不提供 OpenAPI。
 
 **第一阶段核心接口**（前缀 `/api/v1`，全部需登录除 `/auth/login`）：
 - **认证**：`POST /auth/login` · `POST /auth/logout` · `POST /auth/password`
@@ -123,7 +116,7 @@ classroom-manager/
 - **座次**：`GET /classes/:id/seats` · `POST /classes/:id/seats/plan`（求值）· `POST /classes/:id/seats/apply`
 - **积分**：`POST /points/batches`（单人/批量统一）· `POST /points/batches/:id/reverse`（整批撤销）· `POST /points/entries/:id/reverse`（单条撤销）· `GET /points/entries`（筛选时间线）
 - **事件流**：`GET /events?since=<seq>`（SSE，带 Last-Event-ID 重连）
-- **备份**：`GET /backup/records` · `GET /backup/download/:backup_id`
+- **备份**：`GET /backup/records`（下载接口尚未实现）
 
 ## 验收清单（对应需求 §5）
 
@@ -149,8 +142,8 @@ classroom-manager/
 - **密码**：Argon2id（memoryCost=64MB, timeCost=3）+ `token_version` 踢出其他设备
 - **登录限流**：同用户名/IP 5 次/15 分钟
 - **数据库安全**：容器内网通信，不发布宿主机端口
-- **备份**：每日 `pg_dump -Fc` 轮转 30 天，可下载；恢复通过维护命令
-- **匿名化**：学生级 / 班级批量；清空 `name`/`student_no`/`remark`，保留 `anon_code`；**外部 append-only 账本**独立于数据库备份（见 `DEPLOY.md`），用于恢复旧备份后补做后续匿名化
+- **备份**：每天 02:15 由备份容器执行 `pg_dump`，API 可下载成功的 dump；`restore` 只能指向另一个数据库
+- **匿名化**：学生级 / 班级批量；先提交库内意图，再写库外加密账本
 
 ## 已知限制（首版）
 
@@ -162,7 +155,7 @@ classroom-manager/
 
 ## 许可证
 
-MIT License
+MIT License。正文见仓库根目录的 `LICENSE`。
 
 ## 支持
 

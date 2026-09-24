@@ -7,6 +7,7 @@ import { mkdir, readdir, rm, stat, statfs } from 'node:fs/promises';
 import path from 'node:path';
 import { acquireAdvisoryLock, type Db, db as defaultDb } from '../repo/db.js';
 import * as auditRepo from '../repo/audit.js';
+import { Errors } from '../lib/errors.js';
 
 export const DISK_WARN_BYTES = 3 * 1024 * 1024 * 1024;
 export const DEFAULT_RETENTION_DAYS = 30;
@@ -288,4 +289,56 @@ async function pruneOldDumps(dir: string, now: Date, retentionDays: number, keep
     removed.push(name);
   }
   return removed;
+}
+
+export async function openBackupDownload(
+  backupId: string,
+  dir = process.env['BACKUP_DIR']?.trim() || 'backups',
+  db: Db = defaultDb,
+): Promise<{ path: string; file_name: string }> {
+  const row = await auditRepo.findBackup(db, backupId);
+  if (!row || row.status !== 'success') throw Errors.notFound('备份', backupId);
+  let filePath: string;
+  try {
+    filePath = insideDir(dir, row.file_name);
+  } catch {
+    throw Errors.notFound('备份', backupId);
+  }
+  const info = await stat(filePath).catch(() => null);
+  if (!info?.isFile() || info.size <= 0) throw Errors.notFound('备份文件', row.file_name);
+  return { path: filePath, file_name: row.file_name };
+}
+
+import { assertRestoreTarget as rejectSameDatabase, msUntilShanghai as waitUntilShanghai } from '../lib/backupPlan.js';
+
+export const assertRestoreTarget = rejectSameDatabase;
+export const msUntilShanghai = waitUntilShanghai;
+
+export function restoreWithPgRestore(targetUrl: string, filePath: string, timeoutMs = DUMP_TIMEOUT_MS): Promise<void> {
+  const parsed = pgDumpArgs(targetUrl);
+  return new Promise((resolve, reject) => {
+    const child = spawn('pg_restore', ['--clean', '--if-exists', '--no-owner', ...parsed.args, filePath], {
+      env: { ...process.env, ...(parsed.password ? { PGPASSWORD: parsed.password } : {}) },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      disarm();
+      fn();
+    };
+    const disarm = armProcessTimeout(child, timeoutMs, () => finish(() => reject(new Error('超时'))));
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-2000);
+    });
+    child.on('error', (err) => finish(() => reject(err)));
+    child.on('exit', (code) => {
+      finish(() => {
+        if (code === 0) resolve();
+        else reject(new Error(redactSecrets(stderr).trim() || `pg_restore 退出码 ${code ?? 'null'}`));
+      });
+    });
+  });
 }

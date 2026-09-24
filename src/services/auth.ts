@@ -7,7 +7,7 @@
  * - 敏感凭据不进入日志。
  */
 
-import { withTx, type Db, db as defaultDb } from '../repo/db.js';
+import { sql, withTx, type Db, type Tx, db as defaultDb } from '../repo/db.js';
 import * as authRepo from '../repo/auth.js';
 import * as auditRepo from '../repo/audit.js';
 import { verifyPassword } from '../lib/crypto.js';
@@ -24,29 +24,32 @@ export interface LoginResult {
   teacher: { teacher_id: string; username: string; token_version: number };
 }
 
+async function lockLoginScope(tx: Tx, username: string, ip?: string): Promise<void> {
+  const keys = [`login:user:${username}`];
+  if (ip) keys.push(`login:ip:${ip}`);
+  keys.sort();
+  for (const key of keys) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+  }
+}
+
 export async function login(
   input: LoginInput,
   meta: { ip?: string; user_agent?: string },
   db: Db = defaultDb,
 ): Promise<LoginResult> {
-  const failures = await withTx(db, async (tx) => {
+  const result = await withTx(db, async (tx) => {
+    await lockLoginScope(tx, input.username, meta.ip);
     const byName = await authRepo.countRecentFailures(tx, input.username);
     const byIp = meta.ip ? await authRepo.countRecentFailuresByIp(tx, meta.ip) : 0;
-    return Math.max(byName, byIp);
-  });
-  if (failures >= MAX_FAILURES) throw Errors.rateLimited();
+    if (Math.max(byName, byIp) >= MAX_FAILURES) return { ok: false as const, limited: true as const };
 
-  const teacher = await withTx(db, (tx) =>
-    authRepo.verifyTeacherPassword(tx, input.username, input.password),
-  );
-  if (!teacher) {
-    await withTx(db, (tx) => authRepo.logLoginAttempt(tx, input.username, meta.ip, false));
-    throw Errors.unauthenticated('用户名或密码错误');
-  }
+    const teacher = await authRepo.verifyTeacherPassword(tx, input.username, input.password);
+    if (!teacher) {
+      await authRepo.logLoginAttempt(tx, input.username, meta.ip, false);
+      return { ok: false as const };
+    }
 
-  return withTx(db, async (tx) => {
-
-    // 3. 建会话
     const { session_id, token } = await authRepo.createSession(tx, {
       teacher_id: teacher.teacher_id,
       token_version: teacher.token_version,
@@ -65,6 +68,7 @@ export async function login(
     });
 
     return {
+      ok: true as const,
       token,
       session_id,
       teacher: {
@@ -74,6 +78,15 @@ export async function login(
       },
     };
   });
+  if (!result.ok) {
+    if ('limited' in result) throw Errors.rateLimited();
+    throw Errors.unauthenticated('用户名或密码错误');
+  }
+  return {
+    token: result.token,
+    session_id: result.session_id,
+    teacher: result.teacher,
+  };
 }
 
 /** 登出（撤销当前会话）。 */

@@ -1,10 +1,12 @@
 # 设计与当前代码的差异
 
-规范是 `docs/DESIGN.md`、`docs/SCHEMA.md` 和 `docs/API.md`。下表只保留还没对齐的部分。已经按文档改过的行为不再列在这里。
+规范是 `docs/DESIGN.md`、`docs/SCHEMA.md` 和 `docs/API.md`。2026-09-25 审计里的生产阻断项已在代码中处理。下表只保留仍会影响使用的部分。
 
 | 主题 | 规范 | 当前代码 |
 |---|---|---|
 | 座位卡卫生徽章 | `GET /classes/:id/seats` 的 `student.duty` 带在任任期 | 服务端仍固定返回 `null`。前端用 `GET /classes/:id/duty` 的在任任期、本轮成员和下一轮新任合成徽章 |
-| 类型检查 | 服务层能通过当前 Drizzle 类型 | `db.execute` 的返回类型与现有调用方式不一致，这是原有问题，本次没有改查询封装 |
+| HTTP 入口 | 路由按业务模块拆开 | 路由仍集中在 `src/server.ts`。`test/routes.test.ts` 核对已注册路径；座次历史和 OpenAPI 明确不提供 |
 
-已经对齐的部分：`renumerate()` 按 ①→②→③→④ 蛇形编号；`planSwap()` 按轮换链处理重叠并带上未选中学生；手机锚点按列偏移和槽位偏移展开；记账后的 `last_change_seq` 使用该批次的回放事件序号；当前榜只含在班学生，并列之后按班级名和学号排序；新增、离班、恢复携带 `expected_version`；换座错误码不再使用部分重叠；SSE 事件种类包含 `rollcall_changed`；`src/server.ts` 提供登录、班级、学期、学生、布局、座次、积分和时间线、事件补发。
+已经对齐的部分：Docker 构建分为完整依赖的编译阶段和生产依赖的运行阶段；Compose 使用 `POSTGRES_PASSWORD` 组装数据库两端，并传入 `HTTPS_ENABLED` 与 `TRUST_PROXY`；Nginx 在 443 提供静态资源、API 和 SSE，80 跳转到 HTTPS；备份容器带 `pg_dump`、可写卷，并在每天 02:15（Asia/Shanghai）运行；`restore` 只能指向另一数据库。匿名化先提交库内意图，再写库外账本。记分校验班内可见模板，批次可存 `note`。积分时间线按批次分页。登录失败次数与失败记录在同一把咨询锁里提交。预览过期会同时释放解析结果。事件广播由服务层在提交后登记。
+
+`renumerate()` 按 ①→②→③→④ 蛇形编号；`planSwap()` 按轮换链处理重叠并带上未选中学生；手机锚点按列偏移和槽位偏移展开；记账后的 `last_change_seq` 使用该批次的回放事件序号；当前榜只含在班学生，并列之后按班级名和学号排序；新增、离班、恢复携带 `expected_version`；换座错误码不再使用部分重叠；SSE 事件种类包含 `rollcall_changed`。

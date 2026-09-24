@@ -277,6 +277,7 @@ CREATE TABLE IF NOT EXISTS point_batch (
   occurred_at       timestamptz NOT NULL DEFAULT now(),  -- 同批次共享同一时间
   teacher_id        uuid REFERENCES teacher,
   request_id        uuid NOT NULL,
+  note              text,                                -- 补录备注，可空，最长 500
   CONSTRAINT ck_batch_delta_nonzero  CHECK (delta_value <> 0),
   CONSTRAINT ck_batch_member_count   CHECK (member_count > 0),
   CONSTRAINT ck_batch_reversal_shape CHECK (kind <> 'reversal' OR reverses_batch_id IS NOT NULL),

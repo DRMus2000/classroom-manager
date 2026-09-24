@@ -8,6 +8,7 @@ import { type Db, db as defaultDb } from '../repo/db.js';
 import * as classRepo from '../repo/class.js';
 import * as rollcallRepo from '../repo/rollcall.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import {
@@ -91,8 +92,8 @@ async function viewOf(db: Db, row: rollcallRepo.RollcallRow): Promise<RollcallVi
   };
 }
 
-async function publish(tx: Parameters<typeof auditRepo.writeEvent>[0], view: RollcallView, action: string, actorId: string, requestId: string) {
-  await auditRepo.writeEvent(tx, {
+async function publish(tx: Parameters<typeof writeEvent>[0], view: RollcallView, action: string, actorId: string, requestId: string) {
+  await writeEvent(tx, {
     class_id: view.class_id,
     kind: 'rollcall_changed',
     payload: {

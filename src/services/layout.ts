@@ -12,6 +12,7 @@ import { type Db, db as defaultDb } from '../repo/db.js';
 import { idempotentTx } from './idempotency.js';
 import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { renumerate, changedDiff, type RoomColumn, type RoomSlot } from '../domain/renumber.js';
 import { Errors } from '../lib/errors.js';
 import type {
@@ -304,7 +305,7 @@ export async function applyLayoutChange(
       request_id: requestId,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: null, // 全局事件
       kind: 'layout_changed',
       payload: {

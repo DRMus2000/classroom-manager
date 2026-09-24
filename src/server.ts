@@ -4,15 +4,18 @@
  */
 
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import { sessionCookieOptions, trustProxyFromEnv } from './http.js';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import { z, ZodError, type ZodTypeAny } from 'zod';
 import { AppError } from './lib/errors.js';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import * as backupService from './services/backup.js';
 import { healthCheck, db } from './repo/db.js';
 import { broadcaster } from './events/broadcaster.js';
 import * as classRepo from './repo/class.js';
-import * as auditRepo from './repo/audit.js';
 import * as authService from './services/auth.js';
 import * as classService from './services/class.js';
 import * as studentService from './services/students.js';
@@ -137,7 +140,7 @@ async function currentTermId(): Promise<string> {
 }
 
 export async function buildServer() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, trustProxy: trustProxyFromEnv() });
   await app.register(cookie);
   await app.register(multipart, {
     limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 4, fieldSize: 1024 },
@@ -183,12 +186,7 @@ export async function buildServer() {
       ip: request.ip,
       user_agent: request.headers['user-agent'],
     });
-    reply.setCookie(SESSION_COOKIE, result.token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/',
-      secure: process.env['HTTPS_ENABLED'] === 'true',
-    });
+    reply.setCookie(SESSION_COOKIE, result.token, sessionCookieOptions());
     return {
       teacher_id: result.teacher.teacher_id,
       username: result.teacher.username,
@@ -211,12 +209,7 @@ export async function buildServer() {
       user_agent: request.headers['user-agent'],
     });
     if (!changed.token) return { ok: true };
-    reply.setCookie(SESSION_COOKIE, changed.token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/',
-      secure: process.env['HTTPS_ENABLED'] === 'true',
-    });
+    reply.setCookie(SESSION_COOKIE, changed.token, sessionCookieOptions());
     return { ok: true };
   });
 
@@ -289,6 +282,18 @@ export async function buildServer() {
   app.get('/api/v1/backup/records', async (request) => {
     await requireUser(request);
     return auditService.listBackups();
+  });
+
+  app.get('/api/v1/backup/download/:backup_id', async (request, reply) => {
+    await requireUser(request);
+    const backupId = parse<{ backup_id: string }>(z.object({ backup_id: uuid }), request.params).backup_id;
+    const file = await backupService.openBackupDownload(backupId);
+    const info = await stat(file.path);
+    return reply
+      .header('Content-Type', 'application/octet-stream')
+      .header('Content-Disposition', `attachment; filename="${file.file_name}"`)
+      .header('Content-Length', String(info.size))
+      .send(createReadStream(file.path));
   });
 
   app.get('/api/v1/classes', async (request) => {
@@ -626,6 +631,19 @@ export async function buildServer() {
     await requireUser(request);
     const query = parse<ReturnType<typeof listEntriesQuery.parse>>(listEntriesQuery, request.query);
     return pointsService.listTimeline(query);
+  });
+
+  app.get('/api/v1/points/students/:id', async (request) => {
+    await requireUser(request);
+    const query = parse<{ term_id?: string }>(z.object({ term_id: uuid.optional() }), request.query);
+    return pointsService.getStudentTimeline(routeId(request), query.term_id);
+  });
+
+  app.get('/api/v1/points/balances/:student_id', async (request) => {
+    await requireUser(request);
+    const studentId = parse<{ student_id: string }>(z.object({ student_id: uuid }), request.params).student_id;
+    const query = parse<{ term_id?: string }>(z.object({ term_id: uuid.optional() }), request.query);
+    return pointsService.getStudentBalance(studentId, query.term_id);
   });
 
   app.get('/api/v1/classes/:id/duty', async (request) => {

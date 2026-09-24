@@ -202,6 +202,12 @@ export function applyReplayEvent(
   }
 }
 
+export function replayResumeSeq(cursor: number, rangeStartSeq: number): number {
+  if (!Number.isInteger(cursor) || cursor < 0) return rangeStartSeq;
+  if (!Number.isInteger(rangeStartSeq) || rangeStartSeq < 0) return 0;
+  return cursor > 0 ? cursor : rangeStartSeq;
+}
+
 export function rankingFromWorld(
   world: ReplayWorld,
   identities: Map<string, ReplayIdentity>,

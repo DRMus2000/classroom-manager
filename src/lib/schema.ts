@@ -3,7 +3,7 @@
  *
  * 约定：路由的入参/出参、服务的领域类型、前端复用的 DTO 全部从这里 import。
  * 任何在别处手写重复形状的行为都属于契约漂移，必须回到本文件修正。
- * OpenAPI 由本文件通过 scripts/emit-openapi.ts 生成。
+ * 本仓库不提供 OpenAPI 生成脚本。路由以 Fastify 注册表为准。
  */
 import { z } from 'zod';
 
@@ -486,6 +486,7 @@ export const createBatchInput = z.object({
   student_ids: z.array(uuid).min(1).max(200),
   delta: z.number().int().refine((v) => v !== 0, '加减分必须是非零整数'),
   template_id: uuid.nullable().default(null),
+  note: z.string().trim().max(500).nullable().optional(),
 });
 export type CreateBatchInput = z.infer<typeof createBatchInput>;
 
@@ -562,6 +563,7 @@ export const timelineEventDto = z.object({
   delta_value: z.number().int(),
   member_count: z.number().int(),
   kind: z.enum(['score', 'reversal']),
+  note: z.string().nullable(),
   reason_snapshot: z
     .object({ name: z.string(), polarity, source: z.enum(['global', 'class', 'none']) })
     .nullable(),
@@ -740,7 +742,7 @@ export const importIssue = z.object({
 export type ImportIssue = z.infer<typeof importIssue>;
 
 export const importChange = z.object({
-  kind: z.enum(['create', 'update', 'keep', 'seat_change']),
+  kind: z.enum(['create', 'update', 'keep']),
   student_no: z.string(),
   name: z.string(),
   student_id: uuid.nullable(),

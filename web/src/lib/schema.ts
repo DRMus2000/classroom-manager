@@ -340,6 +340,7 @@ export const createBatchInput = z.object({
   student_ids: z.array(uuid).min(1).max(200),
   delta: z.number().int().refine((v) => v !== 0, '加减分必须是非零整数'),
   template_id: uuid.nullable().default(null),
+  note: z.string().trim().max(500).nullable().optional(),
 });
 export type CreateBatchInput = z.infer<typeof createBatchInput>;
 
@@ -403,6 +404,7 @@ export const timelineEventDto = z.object({
   delta_value: z.number().int(),
   member_count: z.number().int(),
   kind: z.enum(['score', 'reversal']),
+  note: z.string().nullable(),
   reason_snapshot: z
     .object({ name: z.string(), polarity, source: z.enum(['global', 'class', 'none']) })
     .nullable(),

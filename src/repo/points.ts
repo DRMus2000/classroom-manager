@@ -8,7 +8,6 @@
  */
 
 import { sql, type Db, type Tx, now } from './db.js';
-import { timestampMs } from '../lib/time.js';
 import type { EntryStatus, Polarity } from '../lib/schema.js';
 
 export interface ReasonTemplateRow {
@@ -43,6 +42,7 @@ export interface BatchRow {
   occurred_at: Date;
   teacher_id: string | null;
   request_id: string;
+  note: string | null;
 }
 
 export interface EntryRow {
@@ -61,6 +61,8 @@ export interface EntryRow {
   reversed_by_entry_id: string | null;
   occurred_at: Date;
   seq: number;
+  student_name?: string | null;
+  note?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -159,7 +161,7 @@ export async function findBatchWithEntries(
 ): Promise<{ batch: BatchRow; entries: EntryRow[] } | null> {
   const batchRows = await db.execute<BatchRow>(
     sql`SELECT batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
-               member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id
+               member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id, note
         FROM point_batch WHERE batch_id = ${batchId}`,
   );
   const batch = batchRows[0];
@@ -200,18 +202,20 @@ export async function insertBatch(
     reverses_batch_id?: string | null;
     teacher_id: string | null;
     request_id: string;
+    note?: string | null;
   },
 ): Promise<BatchRow> {
   const rows = await db.execute<BatchRow>(
     sql`INSERT INTO point_batch
           (term_id, class_id, template_id, reason_snapshot, delta_value, member_count,
-           kind, reverses_batch_id, teacher_id, request_id)
+           kind, reverses_batch_id, teacher_id, request_id, note)
         VALUES (${input.term_id}, ${input.class_id}, ${input.template_id},
                 ${input.reason_snapshot ? JSON.stringify(input.reason_snapshot) : null},
                 ${input.delta_value}, ${input.member_count}, ${input.kind},
-                ${input.reverses_batch_id ?? null}, ${input.teacher_id}, ${input.request_id})
+                ${input.reverses_batch_id ?? null}, ${input.teacher_id}, ${input.request_id},
+                ${input.note ?? null})
         RETURNING batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
-                  member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id`,
+                  member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id, note`,
   );
   return rows[0]!;
 }
@@ -341,11 +345,12 @@ export async function listEntries(db: Db | Tx, f: EntryFilter): Promise<EntryRow
 
   const limit = f.limit ?? 50;
 
-  const rows = await db.execute<EntryRow & { student_name: string | null }>(
+  const rows = await db.execute<EntryRow>(
     sql`SELECT e.entry_id, e.batch_id, e.student_id, e.term_id, e.class_id_snapshot, e.delta,
                e.balance_after, e.seat_id, e.seat_number_snapshot, e.reason_snapshot, e.status,
                e.reverses_entry_id, e.reversed_by_entry_id, e.occurred_at, e.seq,
-               COALESCE(st.name, st.anon_code, '') AS student_name
+               COALESCE(st.name, st.anon_code, '') AS student_name,
+               b.note AS note
         FROM point_entry e
         JOIN point_batch b ON b.batch_id = e.batch_id
         LEFT JOIN student st ON st.student_id = e.student_id
@@ -356,69 +361,106 @@ export async function listEntries(db: Db | Tx, f: EntryFilter): Promise<EntryRow
   return rows;
 }
 
-/** 按批次分组的时间线（班级流水）。 */
-export async function listTimeline(
-  db: Db | Tx,
-  f: EntryFilter,
-): Promise<
-  {
-    batch_id: string;
-    occurred_at: Date;
-    delta_value: number;
-    member_count: number;
-    kind: 'score' | 'reversal';
-    reason_snapshot: unknown;
-    entries: {
-      entry_id: string;
-      student_id: string;
-      student_name: string;
-      delta: number;
-      balance_after: number;
-      status: EntryStatus;
-      seat_number_snapshot: number | null;
-    }[];
-  }[]
-> {
-  const entries = await listEntries(db, { ...f, limit: f.limit ?? 200 });
-  if (entries.length === 0) return [];
+export interface TimelineBatch {
+  batch_id: string;
+  occurred_at: Date;
+  delta_value: number;
+  member_count: number;
+  kind: 'score' | 'reversal';
+  note: string | null;
+  reason_snapshot: unknown;
+  max_seq: number;
+  entries: {
+    entry_id: string;
+    student_id: string;
+    student_name: string;
+    delta: number;
+    balance_after: number;
+    status: EntryStatus;
+    seat_number_snapshot: number | null;
+  }[];
+}
 
-  const batchIds = [...new Set(entries.map((e) => e.batch_id))];
+/**
+ * 按批次分页，并取回该页每个批次的全部匹配明细。
+ * 游标是上一页最后一批的最大明细序号，下一批必须更小。
+ */
+export async function listTimeline(db: Db | Tx, f: EntryFilter): Promise<TimelineBatch[]> {
+  const conds = [sql`true`];
+  if (f.term_id) conds.push(sql`e.term_id = ${f.term_id}`);
+  if (f.class_id) conds.push(sql`e.class_id_snapshot = ${f.class_id}`);
+  if (f.student_id) conds.push(sql`e.student_id = ${f.student_id}`);
+  if (f.date_from) conds.push(sql`e.occurred_at >= ${f.date_from}`);
+  if (f.date_to) conds.push(sql`e.occurred_at <= ${f.date_to}`);
+  if (f.direction === 'add') conds.push(sql`e.delta > 0`);
+  if (f.direction === 'sub') conds.push(sql`e.delta < 0`);
+  if (f.include_reversals === false) conds.push(sql`e.reverses_entry_id IS NULL`);
+  if (f.reason_template_id) conds.push(sql`b.template_id = ${f.reason_template_id}`);
+
+  const limit = f.limit ?? 50;
+  const cursorSql = f.cursor_seq != null ? sql`WHERE max_seq < ${f.cursor_seq}` : sql``;
+  const page = await db.execute<{ batch_id: string; max_seq: number }>(
+    sql`SELECT batch_id, max_seq FROM (
+          SELECT b.batch_id, MAX(e.seq) AS max_seq
+          FROM point_entry e
+          JOIN point_batch b ON b.batch_id = e.batch_id
+          WHERE ${sql.join(conds, sql` AND `)}
+          GROUP BY b.batch_id
+        ) batch_page
+        ${cursorSql}
+        ORDER BY max_seq DESC
+        LIMIT ${limit}`,
+  );
+  if (page.length === 0) return [];
+
+  const batchIds = page.map((row) => row.batch_id);
+  const maxSeq = new Map(page.map((row) => [row.batch_id, Number(row.max_seq)]));
+  const entries = await db.execute<EntryRow>(
+    sql`SELECT e.entry_id, e.batch_id, e.student_id, e.delta, e.balance_after, e.status,
+               e.seat_number_snapshot, e.seq,
+               COALESCE(st.name, st.anon_code, '') AS student_name
+        FROM point_entry e
+        JOIN point_batch b ON b.batch_id = e.batch_id
+        LEFT JOIN student st ON st.student_id = e.student_id
+        WHERE e.batch_id = ANY(${sql.param(batchIds)}::uuid[])
+          AND ${sql.join(conds, sql` AND `)}
+        ORDER BY e.seq DESC`,
+  );
   const batches = await db.execute<BatchRow>(
     sql`SELECT batch_id, term_id, class_id, template_id, reason_snapshot, delta_value,
-               member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id
+               member_count, kind, reverses_batch_id, partial_reversed, occurred_at, teacher_id, request_id, note
         FROM point_batch WHERE batch_id = ANY(${sql.param(batchIds)}::uuid[])`,
   );
-  const batchMap = new Map(batches.map((b) => [b.batch_id, b]));
-
-  const byBatch = new Map<string, typeof entries>();
-  for (const e of entries) {
-    const arr = byBatch.get(e.batch_id) ?? [];
-    arr.push(e);
-    byBatch.set(e.batch_id, arr);
+  const batchMap = new Map(batches.map((row) => [row.batch_id, row]));
+  const byBatch = new Map<string, EntryRow[]>();
+  for (const entry of entries) {
+    const list = byBatch.get(entry.batch_id) ?? [];
+    list.push(entry);
+    byBatch.set(entry.batch_id, list);
   }
 
-  return [...byBatch.entries()]
-    .map(([batchId, rows]) => {
-      const b = batchMap.get(batchId)!;
-      return {
-        batch_id: batchId,
-        occurred_at: b.occurred_at,
-        delta_value: b.delta_value,
-        member_count: b.member_count,
-        kind: b.kind,
-        reason_snapshot: b.reason_snapshot,
-        entries: rows.map((e) => ({
-          entry_id: e.entry_id,
-          student_id: e.student_id,
-          student_name: (e as any).student_name ?? '',
-          delta: e.delta,
-          balance_after: e.balance_after,
-          status: e.status,
-          seat_number_snapshot: e.seat_number_snapshot,
-        })),
-      };
-    })
-    .sort((a, b) => timestampMs(b.occurred_at) - timestampMs(a.occurred_at));
+  return page.map((row) => {
+    const batch = batchMap.get(row.batch_id)!;
+    return {
+      batch_id: row.batch_id,
+      occurred_at: batch.occurred_at,
+      delta_value: batch.delta_value,
+      member_count: batch.member_count,
+      kind: batch.kind,
+      note: batch.note,
+      reason_snapshot: batch.reason_snapshot,
+      max_seq: maxSeq.get(row.batch_id) ?? 0,
+      entries: (byBatch.get(row.batch_id) ?? []).map((entry) => ({
+        entry_id: entry.entry_id,
+        student_id: entry.student_id,
+        student_name: entry.student_name ?? '',
+        delta: entry.delta,
+        balance_after: entry.balance_after,
+        status: entry.status,
+        seat_number_snapshot: entry.seat_number_snapshot,
+      })),
+    };
+  });
 }
 
 /**

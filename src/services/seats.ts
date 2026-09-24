@@ -14,6 +14,7 @@ import * as classRepo from '../repo/class.js';
 import * as pointsRepo from '../repo/points.js';
 import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { planSwap, type SeatOccupancy } from '../domain/seatMove.js';
 import { Errors } from '../lib/errors.js';
 import type {
@@ -224,7 +225,7 @@ export async function applySeatAssignments(
       request_id: input.request_id,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: classId,
       kind: 'seat_changed',
       payload: { class_id: classId, version: newVersion, assignments: input.assignments },

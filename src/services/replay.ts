@@ -11,6 +11,7 @@ import {
   baseStateFromWorld,
   emptyWorld,
   rankingFromWorld,
+  replayResumeSeq,
   snapshotBalances,
   snapshotWorld,
   worldFromCheckpoint,
@@ -171,33 +172,21 @@ export async function replayFrames(
     at: input.from,
     inclusive: false,
   });
-  const checkpoint = await auditRepo.findNearestCheckpoint(
-    db,
-    input.classId,
-    input.termId,
-    rangeStartSeq,
-  );
-  const world = checkpoint ? worldFromCheckpoint(checkpoint.state) : emptyWorld();
-  const afterSeq = checkpoint ? Number(checkpoint.upto_event_seq) : 0;
+  const floor = replayResumeSeq(cursor, rangeStartSeq);
+  const rangeWorld = await worldAtSeq(input.termId, input.classId, rangeStartSeq, db);
+  const rangeStartBalances = snapshotBalances(rangeWorld);
+  const world = floor === rangeStartSeq ? rangeWorld : await worldAtSeq(input.termId, input.classId, floor, db);
   const events = await replayRepo.listReplayEventsBetween(db, {
     termId: input.termId,
     classId: input.classId,
-    afterSeq,
+    afterSeq: floor,
     uptoSeq: lastPageSeq,
   });
   const identities = identityMap(await replayRepo.listReplayIdentities(db, input.classId));
 
-  let rangeStartBalances = new Map<string, number>();
-  let capturedRangeStart = rangeStartSeq <= afterSeq;
-  if (capturedRangeStart) rangeStartBalances = snapshotBalances(world);
-
   const items = [];
   for (const event of events) {
     const eventSeq = Number(event.event_seq);
-    if (!capturedRangeStart && eventSeq > rangeStartSeq) {
-      rangeStartBalances = snapshotBalances(world);
-      capturedRangeStart = true;
-    }
     applyReplayEvent(
       world,
       { event_seq: eventSeq, kind: event.kind, payload: event.payload },

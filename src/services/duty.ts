@@ -6,6 +6,7 @@
 import { sql, type Db, type Tx, db as defaultDb } from '../repo/db.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import {
@@ -109,7 +110,7 @@ function toDomain(row: MemberRow): DutyMember {
 }
 
 async function broadcast(tx: Tx, classId: string, roundId: string, action: string, requestId: string) {
-  await auditRepo.writeEvent(tx, {
+  await writeEvent(tx, {
     class_id: classId,
     kind: 'duty_round_changed',
     payload: { class_id: classId, round_id: roundId, action },

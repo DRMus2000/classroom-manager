@@ -1,8 +1,8 @@
 # API 规格
 
-基线是 `docs/DESIGN.md` v1.1。前缀 `/api/v1`。除 `POST /auth/login` 和 `GET /healthz` 外都要登录。
+基线是 `docs/DESIGN.md` v1.1。业务接口前缀 `/api/v1`；健康检查实际路径为根路径 `/healthz`。除登录和健康检查外都要登录。本文件保留目标契约，明确标注尚无路由的接口。
 
-写操作的 JSON 体带 `request_id`（UUID）。涉及班级座次、布局、学期、卫生轮次的写操作另带 `expected_version`。时间是带时区的 ISO 8601，服务端生成。列表用 `cursor` 与 `limit`，`limit` 最大 200。
+业务写操作的 JSON 体一般带 `request_id`（UUID）；登录不带，导入预览用 multipart。座次和卫生轮次写操作带 `expected_version`，切学期带 `expected_current_term_id`；布局提交用 `preview_hash`。时间是带时区的 ISO 8601，服务端生成。支持分页的列表使用 `cursor` 与 `limit`，`limit` 最大 200。
 
 ## 错误体
 
@@ -34,7 +34,7 @@
 | 409 | `DUTY_NOT_FROZEN` | 尚未冻结候选就抽选 |
 | 409 | `NO_PUSH_ALREADY_MARKED` | 本轮该原管理员已登记未推椅子 |
 | 422 | `IMPORT_INVALID` | 导入校验失败，`details.issues` 含工作表、单元格或行 |
-| 422 | `IMPORT_TOKEN_EXPIRED` | 预览令牌过期 |
+| 409 | `IMPORT_TOKEN_EXPIRED` | 预览令牌过期 |
 | 422 | `SEAT_REQUIRED` | 在班学生没有座位 |
 | 422 | `SEAT_MOVE_UNBALANCED` | 人数与目标座位数不相等，或目标座位不存在 |
 | 422 | `POLARITY_MISMATCH` | 记分方向与原因模板相反 |
@@ -54,7 +54,7 @@
 | POST | `/auth/password` | `{old_password, new_password, request_id}`。`token_version + 1`，全部设备失效，并建立当前新会话 |
 | POST | `/auth/logout-others` | 保留当前会话，撤销其他会话 |
 | GET | `/auth/me` | 用户名、`token_version` |
-| GET | `/healthz` | 进程与数据库连通。无需登录 |
+| GET | `/healthz` | 根路径，不加 `/api/v1`；进程与数据库连通，无需登录 |
 
 ## 班级与学期
 
@@ -110,7 +110,7 @@
 | GET | `/classes/:id/seats` | 座位、学生、当前分、标记、卫生徽章、`seat_version` |
 | POST | `/classes/:id/seats/plan` | 不落库 |
 | POST | `/classes/:id/seats/apply` | 落库 |
-| GET | `/classes/:id/seats/history` | 座次变更审计 |
+| GET | `/classes/:id/seats/history` | 不提供独立路由；使用 `GET /audit` |
 
 `POST /classes/:id/seats/plan` 请求：
 
@@ -160,10 +160,10 @@
 | DELETE | `/classes/:id/templates/:template_id/override` | 取消覆盖 |
 | POST | `/points/batches` | 单人与批量共用 |
 | GET | `/points/entries` | 筛选见下 |
-| GET | `/points/students/:id` | 余额、按批次分组的时间线 |
+| GET | `/points/students/:id` | 学生积分时间线 `{ student, balance, events }`。可选 `term_id` |
 | POST | `/points/batches/:id/reverse` | 只冲销仍有效的明细 |
 | POST | `/points/entries/:id/reverse` | 单条冲销 |
-| GET | `/points/balances/:student_id` | `balance`、`last_change_seq` |
+| GET | `/points/balances/:student_id` | `{ student_id, term_id, balance, last_change_seq }`。可选 `term_id` |
 
 记账：
 
@@ -174,12 +174,11 @@
   "class_id": "…",
   "student_ids": ["…"],
   "delta": 2,
-  "template_id": null,
-  "note": null
+  "template_id": null
 }
 ```
 
-`template_id` 为空表示无原因。有模板时，`delta` 的符号必须与模板方向一致。
+`template_id` 为空表示无原因。有模板时，`delta` 的符号必须与模板方向一致，且该模板必须属于目标班级的可见模板。可选 `note` 最长 500 字，记在批次上，并出现在时间线、导出和回放事件里。
 
 成功响应里每个条目包含 `entry_id`、`student_id`、`delta`、`balance_before`、`balance_after`、`seat_number_snapshot`、`status`。同一次重试返回这份原文。
 
@@ -277,12 +276,12 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/audit` | `entity`、`entity_id`、`from`、`to`、`action`、`cursor` |
+| GET | `/audit` | `entity`、`entity_id`、`date_from`、`date_to`、`action`、`cursor`、`limit` |
 | GET | `/export/points` | 查询参数与 `/points/entries` 相同，响应为 xlsx |
 | GET | `/export/leaderboard` | 查询参数与 `/leaderboard` 相同 |
 | GET | `/backup/records` | 成功时间、失败原因、文件大小、当时磁盘剩余 |
-| GET | `/backup/download/:backup_id` | 下载 `pg_dump -Fc` 文件 |
-| GET | `/openapi.json` | 由 Zod 生成的 OpenAPI 3.1 |
+| GET | `/backup/download/:backup_id` | 下载成功的 dump。需要登录 |
+| GET | `/openapi.json` | 不提供 |
 
 导出与对应列表使用同一套筛选函数，保证行集合一致。
 
@@ -303,13 +302,11 @@
 | `rollcall_changed` | 抽人、排除、关轮 | 重拉当前轮次 |
 | `resync` | `since` 已早于服务端保留的序号 | 全量重拉 |
 
-建连时先发一条 `snapshot`，包含当前 `event_seq`，便于客户端对齐。
-
-`GET /audit` 的时间参数是 `date_from`、`date_to`。
+建连时先发一条 `snapshot`，数据为 `{ "current_event_seq": number }`，便于客户端对齐。
 
 ## 核心响应体
 
-列表统一为 `{ "items": [], "next_cursor": null }`。写操作成功时返回该资源的当前表示，并带上新的版本号。下面是实现时要遵守的形状。
+支持分页的列表返回 `{ "items": [], "next_cursor": null }`；班级、学期、标记等列表直接返回数组。写操作按各接口返回资源或结果对象，只有涉及版本的结果才带新版本号。下面的样例以当前实现为准。
 
 ### 登录与当前用户
 
@@ -354,11 +351,11 @@
 
 ```json
 {
-  "term_id": "…",
-  "status": "closed",
-  "student_count": 54,
-  "entry_count": 800,
-  "batch_count": 120
+  "term": { "term_id": "…", "name": "2026秋季", "status": "closed", "is_current": false, "started_at": "2026-09-01T00:00:00Z", "closed_at": "2026-09-23T00:00:00Z" },
+  "total_batches": 120,
+  "total_entries": 800,
+  "total_reversals": 20,
+  "students_scored": 54
 }
 ```
 
@@ -413,7 +410,7 @@
 }
 ```
 
-`changes.kind` 为 `create`、`update`、`keep`、`seat_change`。提交成功返回 `{ "seat_version": 4, "applied": { "create": 1, "update": 2 } }`。
+导入预览的 `changes.kind` 只有 `create`、`update`、`keep`。换座人数记在 `summary.seat_changes`。提交成功返回 `{ "seat_version": 4, "applied": { "create": 1, "update": 2 } }`。
 
 ### 布局与座次
 
@@ -456,19 +453,14 @@
         "student_no": "202401",
         "balance": 10,
         "marks": [],
-        "duty": {
-          "duty_term_id": "…",
-          "completed_count": 1,
-          "required_count": 3,
-          "status": "active"
-        }
+        "duty": null
       }
     }
   ]
 }
 ```
 
-空座位的 `student` 为 `null`。没有卫生任期时 `duty` 为 `null`。全屏展示使用同一响应，页面不渲染 `remark`。学生详情里的备注只在管理接口 `GET /classes/:id/students` 返回。
+空座位的 `student` 为 `null`。当前座位接口即使有卫生任期也返回 `duty: null`；前端另取 `/classes/:id/duty` 合成徽章。全屏展示使用同一响应，页面不渲染 `remark`。学生详情里的备注只在管理接口 `GET /classes/:id/students` 返回。
 
 ### 积分
 
@@ -525,7 +517,7 @@
 }
 ```
 
-`GET /points/students/:id` 在学生字段之外增加 `balance`、`last_change_seq` 和按批次分组的 `timeline`。`timeline` 每一项含 `batch_id`、`occurred_at`、`delta_value`、`member_count`、`kind`、`reason_snapshot`、`entries`。
+`GET /points/students/:id` 返回 `{ student, balance, events }`。余额数字用 `GET /points/balances/:student_id`。
 
 ### 榜单与回放
 
@@ -610,7 +602,7 @@
 }
 ```
 
-`phase` 为 `marking`、`substituting` 或没有进行中轮次时 `round` 为 `null`。`open_selection` 在 `pending` 或 `cancelled` 时返回抽选对象。`next_appointees` 是本轮确认过、`started_round_id` 仍为空的任期。
+`phase` 为 `marking`、`substituting` 或没有进行中轮次时 `round` 为 `null`。`open_selection` 在 `pending` 或 `cancelled` 时只返回 `{ selection_id, status, new_student_id }`；完整抽选明细需请求 `/duty/selections/:id`。`next_appointees` 是本轮确认过、`started_round_id` 仍为空的任期。
 
 抽选对象见上文卫生一节。`POST /duty/rounds/:id/absent-confirmed` 成功时：
 
@@ -624,6 +616,8 @@
 ```
 
 ### 点名与倒计时
+
+`GET /classes/:id/rollcall` 返回 `{ "round": null }` 或 `{ "round": <下列轮次对象> }`；`GET /rollcall/rounds/:id` 与点名写接口直接返回轮次对象。
 
 ```json
 {
@@ -681,4 +675,4 @@ SSE 的 `data` 为：
 }
 ```
 
-`snapshot` 的 `payload` 至少含 `current_event_seq`。`resync` 的 `payload` 为 `{ "reason": "seq_expired" }`。
+`snapshot` 的 `data` 直接是 `{ "current_event_seq": number }`，不包 `payload`。`resync` 的 `payload` 为 `{ "reason": "seq_expired" }`。

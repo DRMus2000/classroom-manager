@@ -7,6 +7,7 @@ import { type Db, db as defaultDb, withTx } from '../repo/db.js';
 import * as classRepo from '../repo/class.js';
 import * as countdownRepo from '../repo/countdown.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { idempotentTx } from './idempotency.js';
 import { Errors } from '../lib/errors.js';
 import {
@@ -87,7 +88,7 @@ export async function getCountdown(classId: string, db: Db = defaultDb, nowMs = 
         remaining_sec: 0,
         updated_by: locked.updated_by,
       });
-      await auditRepo.writeEvent(tx, {
+      await writeEvent(tx, {
         class_id: classId,
         kind: 'countdown_changed',
         payload: {
@@ -140,7 +141,7 @@ export async function commandCountdown(
         updated_by: actorId,
       });
       const view = toView(classId, next, toIso(saved.updated_at), nowMs);
-      await auditRepo.writeEvent(tx, {
+      await writeEvent(tx, {
         class_id: classId,
         kind: 'countdown_changed',
         payload: {

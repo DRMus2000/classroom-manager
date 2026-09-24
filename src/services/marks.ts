@@ -11,6 +11,7 @@ import { type Db, db as defaultDb, sql } from '../repo/db.js';
 import { idempotentTx } from './idempotency.js';
 import * as studentRepo from '../repo/student.js';
 import * as auditRepo from '../repo/audit.js';
+import { writeEvent } from './publishEvent.js';
 import { Errors } from '../lib/errors.js';
 import type { CreateMarkInput, PatchMarkInput } from '../lib/schema.js';
 
@@ -155,7 +156,7 @@ export async function addMark(
       request_id: requestId,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: student.class_id,
       kind: 'marks_changed',
       payload: { class_id: student.class_id, student_id: studentId, mark_id: markId, action: 'added' },
@@ -190,7 +191,7 @@ export async function removeMark(
       request_id: requestId,
     });
 
-    await auditRepo.writeEvent(tx, {
+    await writeEvent(tx, {
       class_id: student.class_id,
       kind: 'marks_changed',
       payload: {
