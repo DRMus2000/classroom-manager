@@ -74,6 +74,7 @@ export const ERROR_CODES = [
   'SEAT_OCCUPIED',
   'SEAT_REQUIRED',
   'SEAT_MOVE_UNBALANCED',
+  'POLARITY_MISMATCH',
   'TERM_READONLY',
   'STUDENT_NO_SEAT',
   'IMPORT_INVALID',
@@ -102,6 +103,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   SEAT_OCCUPIED: 409,
   SEAT_REQUIRED: 422,
   SEAT_MOVE_UNBALANCED: 422,
+  POLARITY_MISMATCH: 422,
   TERM_READONLY: 422,
   STUDENT_NO_SEAT: 422,
   IMPORT_INVALID: 422,
@@ -390,8 +392,8 @@ export const listEntriesQuery = z.object({
   date_to: isoDateTime.optional(),
   direction: z.enum(['add', 'sub']).optional(),
   reason_template_id: uuid.optional(),
-  include_reversals: z.coerce.boolean().default(true),
-  cursor: z.string().optional(),
+  include_reversals: z.enum(['true', 'false']).default('true').transform((value) => value === 'true'),
+  cursor: z.string().regex(/^[1-9]\d{0,18}$/).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 export type ListEntriesQuery = z.infer<typeof listEntriesQuery>;
@@ -462,7 +464,7 @@ export const auditQuery = z.object({
   action: z.string().optional(),
   date_from: isoDateTime.optional(),
   date_to: isoDateTime.optional(),
-  cursor: z.string().regex(/^\d+$/).optional(),
+  cursor: z.string().regex(/^[1-9]\d{0,18}$/).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 export type AuditQuery = z.infer<typeof auditQuery>;

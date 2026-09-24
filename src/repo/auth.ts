@@ -96,25 +96,26 @@ export async function changePassword(
   teacherId: string,
   oldPassword: string,
   newPassword: string,
-): Promise<boolean> {
+): Promise<number | null> {
   const rows = await db.execute<{ password_hash: string }>(
     sql`SELECT password_hash FROM teacher WHERE teacher_id = ${teacherId}`,
   );
   const row = rows[0];
-  if (!row) return false;
+  if (!row) return null;
 
   const valid = await verifyPassword(row.password_hash, oldPassword);
-  if (!valid) return false;
+  if (!valid) return null;
 
   const newHash = await hashPassword(newPassword);
-  await db.execute(
+  const updated = await db.execute<{ token_version: number }>(
     sql`UPDATE teacher
         SET password_hash = ${newHash},
             token_version = token_version + 1,
             password_changed_at = ${now()}
-        WHERE teacher_id = ${teacherId}`,
+        WHERE teacher_id = ${teacherId}
+        RETURNING token_version`,
   );
-  return true;
+  return updated[0]?.token_version ?? null;
 }
 
 /** 创建会话（返回明文 token + session_id）。 */
@@ -168,6 +169,16 @@ export async function revokeSession(db: Db | Tx, sessionId: string): Promise<voi
   );
 }
 
+/** 撤销教师的全部未失效会话。 */
+export async function revokeAllSessions(db: Db | Tx, teacherId: string): Promise<void> {
+  await db.execute(
+    sql`UPDATE session
+        SET revoked_at = ${now()}
+        WHERE teacher_id = ${teacherId}
+          AND revoked_at IS NULL`,
+  );
+}
+
 /** 撤销教师的全部会话（除指定 session_id）。 */
 export async function revokeOtherSessions(
   db: Db | Tx,
@@ -199,10 +210,22 @@ export async function logLoginAttempt(
 export async function countRecentFailures(db: Db | Tx, username: string): Promise<number> {
   const cutoff = new Date(Date.now() - 15 * 60 * 1000);
   const rows = await db.execute<{ count: number }>(
-    sql`SELECT COUNT(*) as count FROM login_attempt
+    sql`SELECT COUNT(*)::int AS count FROM login_attempt
         WHERE username = ${username}
           AND success = false
           AND attempted_at > ${cutoff}`,
   );
-  return rows[0]?.count ?? 0;
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 查询同一 IP 最近 15 分钟失败次数。 */
+export async function countRecentFailuresByIp(db: Db | Tx, ip: string): Promise<number> {
+  const cutoff = new Date(Date.now() - 15 * 60 * 1000);
+  const rows = await db.execute<{ count: number }>(
+    sql`SELECT COUNT(*)::int AS count FROM login_attempt
+        WHERE ip = ${ip}::inet
+          AND success = false
+          AND attempted_at > ${cutoff}`,
+  );
+  return Number(rows[0]?.count ?? 0);
 }

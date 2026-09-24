@@ -15,7 +15,7 @@
  * 挂载在独立卷上，与 backups 卷分开，绝不随数据库恢复被覆盖。
  */
 
-import { readFile, writeFile, rename, mkdir, rm } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir, rm, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { encryptAnonLedger, decryptAnonLedger } from '../lib/crypto.js';
@@ -88,6 +88,7 @@ export async function appendAnonLedgerEntries(inputs: NewAnonLedgerEntry[]): Pro
   if (inputs.length === 0) return [];
   for (const input of inputs) validateLedgerInput(input);
 
+  return withLedgerLock(async () => {
   const key = ledgerKey();
   const existing = await readLedger();
   const ids: string[] = [];
@@ -113,6 +114,7 @@ export async function appendAnonLedgerEntries(inputs: NewAnonLedgerEntry[]): Pro
   if (appended.length === 0) return ids;
   await writeEncrypted([...existing, ...appended], key);
   return ids;
+  });
 }
 
 function validateLedgerInput(input: NewAnonLedgerEntry): void {
@@ -127,6 +129,28 @@ function validateLedgerInput(input: NewAnonLedgerEntry): void {
   }
   if (Number.isNaN(Date.parse(input.processed_at))) {
     throw new Error('匿名账本时间不合法');
+  }
+}
+
+async function withLedgerLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lockPath = `${ledgerPath()}.lock`;
+  await mkdir(dirname(lockPath), { recursive: true });
+  const started = Date.now();
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  while (!handle) {
+    try {
+      handle = await open(lockPath, 'wx');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      if (Date.now() - started > 5_000) throw new Error('匿名账本锁等待超时');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await handle.close();
+    await rm(lockPath, { force: true });
   }
 }
 

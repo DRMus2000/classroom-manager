@@ -37,6 +37,7 @@
 | 422 | `IMPORT_TOKEN_EXPIRED` | 预览令牌过期 |
 | 422 | `SEAT_REQUIRED` | 在班学生没有座位 |
 | 422 | `SEAT_MOVE_UNBALANCED` | 人数与目标座位数不相等，或目标座位不存在 |
+| 422 | `POLARITY_MISMATCH` | 记分方向与原因模板相反 |
 | 422 | `TERM_READONLY` | 学期已归档 |
 | 422 | `STUDENT_NO_SEAT` | 班内存在无座在班学生，导入被阻塞 |
 | 429 | `RATE_LIMITED` | 登录限流 |

@@ -45,6 +45,7 @@ import {
   importCommitInput,
   importTemplateQuery,
   createStudentInput,
+  createTemplateInput,
   createTermInput,
   leaveStudentInput,
   listEntriesQuery,
@@ -53,7 +54,9 @@ import {
   markAssignInput,
   patchClassInput,
   patchMarkInput,
+  patchTemplateInput,
   patchStudentInput,
+  overrideTemplateInput,
   planSeatsInput,
   previewLayoutChangeInput,
   restoreStudentInput,
@@ -166,10 +169,19 @@ export async function buildServer() {
     return { ok: true };
   });
 
-  app.post('/api/v1/auth/password', async (request) => {
+  app.post('/api/v1/auth/password', async (request, reply) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof changePasswordInput.parse>>(changePasswordInput, request.body);
-    await authService.changePassword(user.teacher_id, user.session_id, body);
+    const { token } = await authService.changePassword(user.teacher_id, user.session_id, body, db, {
+      ip: request.ip,
+      user_agent: request.headers['user-agent'],
+    });
+    reply.setCookie(SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      secure: process.env['HTTPS_ENABLED'] === 'true',
+    });
     return { ok: true };
   });
 
@@ -258,7 +270,7 @@ export async function buildServer() {
   app.patch('/api/v1/classes/:id', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof patchClassInput.parse>>(patchClassInput, request.body);
-    return classService.patchClass(user.teacher_id, (request.params as { id: string }).id, body);
+    return classService.patchClass(user.teacher_id, routeId(request), body);
   });
 
   app.get('/api/v1/terms', async (request) => {
@@ -275,18 +287,18 @@ export async function buildServer() {
   app.post('/api/v1/terms/:id/activate', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof activateTermInput.parse>>(activateTermInput, request.body);
-    return classService.activateTerm(user.teacher_id, (request.params as { id: string }).id, body);
+    return classService.activateTerm(user.teacher_id, routeId(request), body);
   });
 
   app.get('/api/v1/terms/:id/summary', async (request) => {
     await requireUser(request);
-    return classService.termSummary((request.params as { id: string }).id);
+    return classService.termSummary(routeId(request));
   });
 
   app.get('/api/v1/classes/:id/students', async (request) => {
     await requireUser(request);
     const q = request.query as { status?: 'active' | 'left' | 'anonymized' | 'all'; q?: string };
-    return studentService.listStudents((request.params as { id: string }).id, {
+    return studentService.listStudents(routeId(request), {
       status: q.status,
       q: q.q,
     });
@@ -295,25 +307,25 @@ export async function buildServer() {
   app.post('/api/v1/classes/:id/students', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof createStudentInput.parse>>(createStudentInput, request.body);
-    return studentService.createStudent(user.teacher_id, (request.params as { id: string }).id, body);
+    return studentService.createStudent(user.teacher_id, routeId(request), body);
   });
 
   app.patch('/api/v1/students/:id', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof patchStudentInput.parse>>(patchStudentInput, request.body);
-    return studentService.patchStudent(user.teacher_id, (request.params as { id: string }).id, body);
+    return studentService.patchStudent(user.teacher_id, routeId(request), body);
   });
 
   app.post('/api/v1/students/:id/leave', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof leaveStudentInput.parse>>(leaveStudentInput, request.body);
-    return studentService.leaveStudent(user.teacher_id, (request.params as { id: string }).id, body);
+    return studentService.leaveStudent(user.teacher_id, routeId(request), body);
   });
 
   app.post('/api/v1/students/:id/restore', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof restoreStudentInput.parse>>(restoreStudentInput, request.body);
-    return studentService.restoreStudent(user.teacher_id, (request.params as { id: string }).id, body);
+    return studentService.restoreStudent(user.teacher_id, routeId(request), body);
   });
 
   app.post('/api/v1/students/:id/anonymize', async (request) => {
@@ -334,8 +346,7 @@ export async function buildServer() {
     await requireUser(request);
     const classId = routeId(request);
     const query = parse<ReturnType<typeof importTemplateQuery.parse>>(importTemplateQuery, request.query);
-    const cls = await classRepo.findClass(db, classId);
-    if (!cls) throw new AppError('NOT_FOUND', '班级不存在');
+    await classService.requireClass(classId);
     const template = await buildImportTemplate(query.kind);
     return reply
       .header('Content-Type', XLSX_MIME)
@@ -414,20 +425,20 @@ export async function buildServer() {
 
   app.get('/api/v1/classes/:id/seats', async (request) => {
     await requireUser(request);
-    return seatService.getClassSeats((request.params as { id: string }).id, await currentTermId());
+    return seatService.getClassSeats(routeId(request), await currentTermId());
   });
 
   app.post('/api/v1/classes/:id/seats/plan', async (request) => {
     await requireUser(request);
     const body = parse<ReturnType<typeof planSeatsInput.parse>>(planSeatsInput, request.body);
-    return seatService.planSeats((request.params as { id: string }).id, body);
+    return seatService.planSeats(routeId(request), body);
   });
 
   app.post('/api/v1/classes/:id/seats/apply', async (request) => {
     const user = await requireUser(request);
     const body = parse<ReturnType<typeof seatAssignmentsInput.parse>>(seatAssignmentsInput, request.body);
     return seatService.applySeatAssignments(
-      (request.params as { id: string }).id,
+      routeId(request),
       await currentTermId(),
       user.teacher_id,
       body,
@@ -445,7 +456,7 @@ export async function buildServer() {
     const body = parse<ReturnType<typeof reverseBatchInput.parse>>(reverseBatchInput, request.body);
     return pointsService.reverseBatch(
       user.teacher_id,
-      (request.params as { id: string }).id,
+      routeId(request),
       body.request_id,
     );
   });
@@ -455,7 +466,55 @@ export async function buildServer() {
     const body = parse<ReturnType<typeof reverseEntryInput.parse>>(reverseEntryInput, request.body);
     return pointsService.reverseEntry(
       user.teacher_id,
-      (request.params as { id: string }).id,
+      routeId(request),
+      body.request_id,
+    );
+  });
+
+  app.get('/api/v1/classes/:id/templates', async (request) => {
+    await requireUser(request);
+    return pointsService.listEffectiveTemplates(routeId(request));
+  });
+
+  app.post('/api/v1/templates', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof createTemplateInput.parse>>(createTemplateInput, request.body);
+    return pointsService.createGlobalTemplate(user.teacher_id, body);
+  });
+
+  app.patch('/api/v1/templates/:id', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof patchTemplateInput.parse>>(patchTemplateInput, request.body);
+    return pointsService.patchGlobalTemplate(user.teacher_id, routeId(request), body);
+  });
+
+  app.post('/api/v1/classes/:id/templates', async (request) => {
+    const user = await requireUser(request);
+    const body = parse<ReturnType<typeof createTemplateInput.parse>>(createTemplateInput, request.body);
+    return pointsService.createClassTemplate(user.teacher_id, routeId(request), body);
+  });
+
+  app.post('/api/v1/classes/:id/templates/:template_id/override', async (request) => {
+    const user = await requireUser(request);
+    const params = parse<{ id: string; template_id: string }>(
+      z.object({ id: uuid, template_id: uuid }),
+      request.params,
+    );
+    const body = parse<ReturnType<typeof overrideTemplateInput.parse>>(overrideTemplateInput, request.body);
+    return pointsService.overrideTemplate(user.teacher_id, params.id, params.template_id, body);
+  });
+
+  app.delete('/api/v1/classes/:id/templates/:template_id/override', async (request) => {
+    const user = await requireUser(request);
+    const params = parse<{ id: string; template_id: string }>(
+      z.object({ id: uuid, template_id: uuid }),
+      request.params,
+    );
+    const body = parse<ReturnType<typeof markAssignInput.parse>>(markAssignInput, request.body);
+    return pointsService.clearTemplateOverride(
+      user.teacher_id,
+      params.id,
+      params.template_id,
       body.request_id,
     );
   });
@@ -463,8 +522,7 @@ export async function buildServer() {
   app.get('/api/v1/points/entries', async (request) => {
     await requireUser(request);
     const query = parse<ReturnType<typeof listEntriesQuery.parse>>(listEntriesQuery, request.query);
-    const items = await pointsService.listTimeline(query);
-    return { items, next_cursor: null };
+    return pointsService.listTimeline(query);
   });
 
   app.get('/api/v1/events', async (request, reply: FastifyReply) => {
@@ -479,9 +537,8 @@ export async function buildServer() {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    const current = await auditRepo.maxEventSeq(db);
+    const { current, rows } = await auditService.eventsSince(since, query.class_id);
     raw.write(`event: snapshot\ndata: ${JSON.stringify({ current_event_seq: current })}\n\n`);
-    const rows = await auditRepo.listEventsSince(db, since, query.class_id);
     if (since > 0 && rows.length === 0 && current > since + 1000) {
       raw.write(`event: resync\ndata: ${JSON.stringify({ reason: 'seq_expired' })}\n\n`);
     }

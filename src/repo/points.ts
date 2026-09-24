@@ -94,6 +94,21 @@ export async function createTemplate(
   return rows[0]!;
 }
 
+export async function updateTemplate(
+  db: Tx,
+  templateId: string,
+  patch: { name?: string; default_delta?: number },
+): Promise<ReasonTemplateRow | null> {
+  const rows = await db.execute<ReasonTemplateRow>(
+    sql`UPDATE reason_template
+        SET name = COALESCE(${patch.name ?? null}, name),
+            default_delta = COALESCE(${patch.default_delta ?? null}, default_delta)
+        WHERE template_id = ${templateId}
+        RETURNING template_id, name, polarity, default_delta, hidden_by_default, sort_order`,
+  );
+  return rows[0] ?? null;
+}
+
 /** 班级覆盖清单。 */
 export async function listClassOverrides(
   db: Db | Tx,

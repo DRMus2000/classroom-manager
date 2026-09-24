@@ -25,6 +25,12 @@ import type {
 /* 班级                                                                */
 /* ------------------------------------------------------------------ */
 
+export async function requireClass(classId: string, db: Db = defaultDb) {
+  const cls = await classRepo.findClass(db, classId);
+  if (!cls) throw Errors.notFound('班级', classId);
+  return cls;
+}
+
 export async function listClasses(
   includeArchived: boolean,
   db: Db = defaultDb,

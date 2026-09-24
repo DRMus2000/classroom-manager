@@ -78,6 +78,16 @@ describe('audit and backup reads', { timeout: 180_000 }, () => {
       const health = await audit.backupHealth();
       assert.equal(health.last_failure_error, 'disk full');
       assert.equal(health.disk_warning, true);
+
+      await client.query(
+        `INSERT INTO audit_log (entity, entity_id, action, before, after)
+         VALUES ('student', 's-secret', 'updated', '{"name":"张小明","student_no":"202401"}', '{"name":"张小明","student_no":"202499"}')`,
+      );
+      const redacted = await audit.listAudit({ entity: 'student', limit: 10 });
+      const body = JSON.stringify(redacted);
+      assert.equal(body.includes('张小明'), false);
+      assert.equal(body.includes('202401'), false);
+      assert.equal(body.includes('202499'), false);
     } finally {
       await client.end();
     }

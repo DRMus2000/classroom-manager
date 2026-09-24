@@ -29,20 +29,22 @@ export async function login(
   meta: { ip?: string; user_agent?: string },
   db: Db = defaultDb,
 ): Promise<LoginResult> {
-  return withTx(db, async (tx) => {
-    // 1. 限流检查
-    const failures = await authRepo.countRecentFailures(tx, input.username);
-    if (failures >= MAX_FAILURES) {
-      await authRepo.logLoginAttempt(tx, input.username, meta.ip, false);
-      throw Errors.rateLimited();
-    }
+  const failures = await withTx(db, async (tx) => {
+    const byName = await authRepo.countRecentFailures(tx, input.username);
+    const byIp = meta.ip ? await authRepo.countRecentFailuresByIp(tx, meta.ip) : 0;
+    return Math.max(byName, byIp);
+  });
+  if (failures >= MAX_FAILURES) throw Errors.rateLimited();
 
-    // 2. 校验密码
-    const teacher = await authRepo.verifyTeacherPassword(tx, input.username, input.password);
-    if (!teacher) {
-      await authRepo.logLoginAttempt(tx, input.username, meta.ip, false);
-      throw Errors.unauthenticated('用户名或密码错误');
-    }
+  const teacher = await withTx(db, (tx) =>
+    authRepo.verifyTeacherPassword(tx, input.username, input.password),
+  );
+  if (!teacher) {
+    await withTx(db, (tx) => authRepo.logLoginAttempt(tx, input.username, meta.ip, false));
+    throw Errors.unauthenticated('用户名或密码错误');
+  }
+
+  return withTx(db, async (tx) => {
 
     // 3. 建会话
     const { session_id, token } = await authRepo.createSession(tx, {
@@ -97,13 +99,25 @@ export async function changePassword(
   currentSessionId: string,
   input: ChangePasswordInput,
   db: Db = defaultDb,
-): Promise<void> {
-  await idempotentTx(db, input.request_id, 'POST /api/v1/auth/password', input, async (tx) => {
-    const ok = await authRepo.changePassword(tx, teacherId, input.old_password, input.new_password);
-    if (!ok) throw Errors.unauthenticated('原密码错误');
+  meta: { ip?: string; user_agent?: string } = {},
+): Promise<{ token: string }> {
+  return idempotentTx(db, input.request_id, 'POST /api/v1/auth/password', input, async (tx) => {
+    const tokenVersion = await authRepo.changePassword(
+      tx,
+      teacherId,
+      input.old_password,
+      input.new_password,
+    );
+    if (tokenVersion == null) throw Errors.unauthenticated('原密码错误');
 
-    // 撤销除当前会话外的全部会话
-    await authRepo.revokeOtherSessions(tx, teacherId, currentSessionId);
+    await authRepo.revokeAllSessions(tx, teacherId);
+    const created = await authRepo.createSession(tx, {
+      teacher_id: teacherId,
+      token_version: tokenVersion,
+      user_agent: meta.user_agent,
+      ip: meta.ip,
+      expires_in_ms: SESSION_TTL_MS,
+    });
 
     await auditRepo.writeAudit(tx, {
       actor: teacherId,
@@ -112,6 +126,7 @@ export async function changePassword(
       action: 'change_password',
       request_id: input.request_id,
     });
+    return { token: created.token };
   });
 }
 

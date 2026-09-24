@@ -9,6 +9,7 @@
 import type { Db } from '../repo/db.js';
 import { db as defaultDb } from '../repo/db.js';
 import * as auditRepo from '../repo/audit.js';
+import { AppError } from '../lib/errors.js';
 import type { AuditQuery, BackupRecordDto } from '../lib/schema.js';
 
 function isoTimestamp(value: Date | string | null | undefined): string | null {
@@ -19,8 +20,21 @@ function isoTimestamp(value: Date | string | null | undefined): string | null {
 
 function requiredIso(value: Date | string): string {
   const iso = isoTimestamp(value);
-  if (!iso) throw new Error('时间字段无法解析');
+  if (!iso) throw new AppError('INTERNAL', '时间字段无法解析');
   return iso;
+}
+
+function redactAudit(value: unknown, entity: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => redactAudit(item, entity));
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  const rest: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (key === 'student_no') continue;
+    if (key === 'name' && (entity === 'student' || 'student_no' in record)) continue;
+    rest[key] = redactAudit(child, entity);
+  }
+  return rest;
 }
 
 export interface AuditDto {
@@ -33,6 +47,12 @@ export interface AuditDto {
   after: unknown;
   request_id: string | null;
   created_at: string;
+}
+
+export async function eventsSince(since: number, classId?: string, db: Db = defaultDb) {
+  const current = await auditRepo.maxEventSeq(db);
+  const rows = await auditRepo.listEventsSince(db, since, classId);
+  return { current, rows };
 }
 
 export async function listAudit(
@@ -61,8 +81,8 @@ export async function listAudit(
       entity: r.entity,
       entity_id: r.entity_id,
       action: r.action,
-      before: r.before,
-      after: r.after,
+      before: redactAudit(r.before, r.entity),
+      after: redactAudit(r.after, r.entity),
       request_id: r.request_id,
       created_at: requiredIso(r.created_at),
     })),

@@ -38,7 +38,9 @@ describe('audit routes', () => {
       const audit = await app.inject({ method: 'GET', url: '/api/v1/audit?cursor=nope' });
       const backups = await app.inject({ method: 'GET', url: '/api/v1/backup/records' });
       assert.equal(audit.statusCode, 401);
+      assert.equal(audit.json().error.code, 'UNAUTHENTICATED');
       assert.equal(backups.statusCode, 401);
+      assert.equal(backups.json().error.code, 'UNAUTHENTICATED');
     } finally {
       await app.close();
     }

@@ -8,14 +8,14 @@
  * - 旧学期只读：非当前学期一律拒绝写入（DB 触发器兜底）。
  */
 
-import { type Db, db as defaultDb } from '../repo/db.js';
+import { type Db, db as defaultDb, sql } from '../repo/db.js';
 import * as pointsRepo from '../repo/points.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
 import { idempotentTx } from './idempotency.js';
 import { canReverseBatch, canReverseEntry, validateDeltaPolarity } from '../domain/points.js';
-import { Errors } from '../lib/errors.js';
+import { AppError, Errors } from '../lib/errors.js';
 import type {
   CreateBatchInput,
   BatchResultDto,
@@ -78,20 +78,28 @@ export async function createBatch(
 
           // 方向校验：当次可改大小，不能反转模板方向
           if (!validateDeltaPolarity(input.delta, tpl.polarity)) {
-            throw Errors.seatMoveUnbalanced(
+            throw Errors.polarityMismatch(
               `分值方向与模板「${effectiveName}」不一致（模板为${tpl.polarity > 0 ? '加分' : '扣分'}）`,
             );
           }
         }
 
-        // 4. 校验学生：全部在班且有座
+        const studentIds = [...new Set(input.student_ids)];
+        if (studentIds.length !== input.student_ids.length) {
+          throw new AppError('VALIDATION_FAILED', '同一学生不能在一批里出现两次', {
+            issues: [{ path: ['student_ids'], message: '存在重复的 student_id' }],
+          });
+        }
+
         const students = await studentRepo.listStudents(tx, input.class_id, { status: 'active' });
         const byId = new Map(students.map((s) => [s.student_id, s]));
-
-        for (const sid of input.student_ids) {
-          const s = byId.get(sid);
-          if (!s) throw Errors.notFound('在班学生', sid);
+        for (const sid of studentIds) {
+          if (!byId.get(sid)) throw Errors.notFound('在班学生', sid);
         }
+        const seats = await studentRepo.listClassSeats(tx, input.class_id);
+        const seatByStudent = new Map(
+          seats.filter((seat) => seat.student_id).map((seat) => [seat.student_id as string, seat]),
+        );
 
         // 5. 写入批次
         const occurredAt = new Date();
@@ -102,7 +110,7 @@ export async function createBatch(
           template_id: input.template_id,
           reason_snapshot: reasonSnapshot,
           delta_value: input.delta,
-          member_count: input.student_ids.length,
+          member_count: studentIds.length,
           kind: 'score',
           teacher_id: actorId,
           request_id: input.request_id,
@@ -110,8 +118,8 @@ export async function createBatch(
 
         // 6. 逐条写入明细（含座位快照）+ 更新余额
         const entries: PointEntryDto[] = [];
-        for (const sid of input.student_ids) {
-          const seat = await studentRepo.findStudentSeat(tx, input.class_id, sid);
+        for (const sid of studentIds) {
+          const seat = seatByStudent.get(sid);
           const student = byId.get(sid)!;
 
           const entry = await pointsRepo.insertEntry(tx, {
@@ -153,7 +161,7 @@ export async function createBatch(
           action: 'scored',
           after: {
             delta: input.delta,
-            member_count: input.student_ids.length,
+            member_count: studentIds.length,
             template_id: input.template_id,
           },
           request_id: input.request_id,
@@ -177,7 +185,7 @@ export async function createBatch(
         await pointsRepo.setTieBreakSeq(
           tx,
           input.term_id,
-          input.student_ids,
+          studentIds,
           Number(scoredEvent.event_seq),
         );
 
@@ -518,8 +526,9 @@ export async function reverseEntry(
 export async function listTimeline(
   q: ListEntriesQuery,
   db: Db = defaultDb,
-): Promise<TimelineEventDto[]> {
-  const rows = await pointsRepo.listTimeline(db, {
+): Promise<{ items: TimelineEventDto[]; next_cursor: string | null }> {
+  const limit = q.limit ?? 50;
+  const rows = await pointsRepo.listEntries(db, {
     term_id: q.term_id,
     class_id: q.class_id,
     student_id: q.student_id,
@@ -528,18 +537,37 @@ export async function listTimeline(
     direction: q.direction,
     reason_template_id: q.reason_template_id,
     include_reversals: q.include_reversals,
-    limit: q.limit,
+    cursor_seq: q.cursor ? Number(q.cursor) : undefined,
+    limit: limit + 1,
   });
-
-  return rows.map((r) => ({
-    batch_id: r.batch_id,
-    occurred_at: r.occurred_at.toISOString(),
-    delta_value: r.delta_value,
-    member_count: r.member_count,
-    kind: r.kind,
-    reason_snapshot: r.reason_snapshot as any,
-    entries: r.entries,
-  }));
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const grouped = await pointsRepo.listTimeline(db, {
+    term_id: q.term_id,
+    class_id: q.class_id,
+    student_id: q.student_id,
+    date_from: q.date_from ? new Date(q.date_from) : undefined,
+    date_to: q.date_to ? new Date(q.date_to) : undefined,
+    direction: q.direction,
+    reason_template_id: q.reason_template_id,
+    include_reversals: q.include_reversals,
+    cursor_seq: q.cursor ? Number(q.cursor) : undefined,
+    limit,
+  });
+  const last = page[page.length - 1];
+  return {
+    items: grouped.map((row) => ({
+      batch_id: row.batch_id,
+      occurred_at:
+        row.occurred_at instanceof Date ? row.occurred_at.toISOString() : new Date(row.occurred_at).toISOString(),
+      delta_value: row.delta_value,
+      member_count: row.member_count,
+      kind: row.kind,
+      reason_snapshot: row.reason_snapshot as TimelineEventDto['reason_snapshot'],
+      entries: row.entries,
+    })),
+    next_cursor: hasMore && last ? String(Number(last.seq)) : null,
+  };
 }
 
 /** 学生详情时间线。 */
@@ -562,10 +590,12 @@ export async function getStudentTimeline(
 
   const balance = await pointsRepo.findBalance(db, term.term_id, studentId);
 
-  const events = await listTimeline(
-    { student_id: studentId, term_id: term.term_id, limit: 200, include_reversals: true },
-    db,
-  );
+  const events = (
+    await listTimeline(
+      { student_id: studentId, term_id: term.term_id, limit: 200, include_reversals: true },
+      db,
+    )
+  ).items;
 
   return {
     student: {
@@ -581,6 +611,165 @@ export async function getStudentTimeline(
 /* ------------------------------------------------------------------ */
 /* 模板（有效值 = 全局基线 + 班级覆盖）                                 */
 /* ------------------------------------------------------------------ */
+
+export async function createGlobalTemplate(
+  actorId: string,
+  input: { name: string; polarity: Polarity; default_delta: number; sort_order?: number; request_id: string },
+  db: Db = defaultDb,
+) {
+  assertDeltaSign(input.default_delta, input.polarity);
+  return idempotentTx(db, input.request_id, 'POST /api/v1/templates', input, async (tx) => {
+    const created = await pointsRepo.createTemplate(tx, {
+      name: input.name,
+      polarity: input.polarity,
+      default_delta: input.default_delta,
+      sort_order: input.sort_order,
+    });
+    await auditRepo.writeAudit(tx, {
+      actor: actorId,
+      entity: 'reason_template',
+      entity_id: created.template_id,
+      action: 'created',
+      after: { polarity: created.polarity, default_delta: created.default_delta },
+      request_id: input.request_id,
+    });
+    return created;
+  });
+}
+
+export async function patchGlobalTemplate(
+  actorId: string,
+  templateId: string,
+  input: { name?: string; default_delta?: number; request_id: string },
+  db: Db = defaultDb,
+) {
+  return idempotentTx(db, input.request_id, `PATCH /api/v1/templates/${templateId}`, input, async (tx) => {
+    const current = await pointsRepo.findTemplate(tx, templateId);
+    if (!current) throw Errors.notFound('原因模板', templateId);
+    if (input.default_delta != null) assertDeltaSign(input.default_delta, current.polarity);
+    const updated = await pointsRepo.updateTemplate(tx, templateId, {
+      name: input.name,
+      default_delta: input.default_delta,
+    });
+    if (!updated) throw Errors.notFound('原因模板', templateId);
+    await auditRepo.writeAudit(tx, {
+      actor: actorId,
+      entity: 'reason_template',
+      entity_id: templateId,
+      action: 'updated',
+      before: { default_delta: current.default_delta },
+      after: { default_delta: updated.default_delta },
+      request_id: input.request_id,
+    });
+    return updated;
+  });
+}
+
+export async function createClassTemplate(
+  actorId: string,
+  classId: string,
+  input: { name: string; polarity: Polarity; default_delta: number; request_id: string },
+  db: Db = defaultDb,
+) {
+  assertDeltaSign(input.default_delta, input.polarity);
+  return idempotentTx(
+    db,
+    input.request_id,
+    `POST /api/v1/classes/${classId}/templates`,
+    input,
+    async (tx) => {
+      const cls = await classRepo.findClass(tx, classId);
+      if (!cls) throw Errors.notFound('班级', classId);
+      const created = await pointsRepo.createTemplate(tx, {
+        name: input.name,
+        polarity: input.polarity,
+        default_delta: input.default_delta,
+      });
+      await tx.execute(
+        sql`UPDATE reason_template SET hidden_by_default = true WHERE template_id = ${created.template_id}`,
+      );
+      await pointsRepo.upsertClassOverride(tx, classId, created.template_id, {
+        hidden: false,
+        added_in_class: true,
+      });
+      await auditRepo.writeAudit(tx, {
+        actor: actorId,
+        entity: 'reason_template',
+        entity_id: created.template_id,
+        action: 'created_in_class',
+        after: { class_id: classId, polarity: input.polarity, default_delta: input.default_delta },
+        request_id: input.request_id,
+      });
+      return { ...created, hidden_by_default: true, added_in_class: true };
+    },
+  );
+}
+
+export async function overrideTemplate(
+  actorId: string,
+  classId: string,
+  templateId: string,
+  input: { name?: string | null; default_delta?: number | null; hidden?: boolean | null; request_id: string },
+  db: Db = defaultDb,
+) {
+  return idempotentTx(
+    db,
+    input.request_id,
+    `POST /api/v1/classes/${classId}/templates/${templateId}/override`,
+    input,
+    async (tx) => {
+      const tpl = await pointsRepo.findTemplate(tx, templateId);
+      if (!tpl) throw Errors.notFound('原因模板', templateId);
+      if (input.default_delta != null) assertDeltaSign(input.default_delta, tpl.polarity);
+      await pointsRepo.upsertClassOverride(tx, classId, templateId, {
+        name: input.name,
+        default_delta: input.default_delta,
+        hidden: input.hidden,
+      });
+      await auditRepo.writeAudit(tx, {
+        actor: actorId,
+        entity: 'class_template_override',
+        entity_id: `${classId}:${templateId}`,
+        action: 'overridden',
+        after: { default_delta: input.default_delta ?? null, hidden: input.hidden ?? null },
+        request_id: input.request_id,
+      });
+      return listEffectiveTemplates(classId, tx);
+    },
+  );
+}
+
+export async function clearTemplateOverride(
+  actorId: string,
+  classId: string,
+  templateId: string,
+  requestId: string,
+  db: Db = defaultDb,
+) {
+  return idempotentTx(
+    db,
+    requestId,
+    `DELETE /api/v1/classes/${classId}/templates/${templateId}/override`,
+    { request_id: requestId },
+    async (tx) => {
+      await pointsRepo.deleteClassOverride(tx, classId, templateId);
+      await auditRepo.writeAudit(tx, {
+        actor: actorId,
+        entity: 'class_template_override',
+        entity_id: `${classId}:${templateId}`,
+        action: 'cleared',
+        request_id: requestId,
+      });
+      return { ok: true };
+    },
+  );
+}
+
+function assertDeltaSign(delta: number, polarity: Polarity) {
+  if (delta === 0 || Math.sign(delta) !== polarity) {
+    throw Errors.polarityMismatch('默认分值的符号必须与模板方向一致');
+  }
+}
 
 export async function listEffectiveTemplates(
   classId: string,

@@ -68,6 +68,7 @@ export const Errors = {
   seatRequired: (msg = '在班学生必须绑定独立座位') => err('SEAT_REQUIRED', msg),
   seatMoveUnbalanced: (msg = '来源学生数与目标座位数不匹配，或目标座位不存在') =>
     err('SEAT_MOVE_UNBALANCED', msg),
+  polarityMismatch: (msg = '分值方向与模板不一致') => err('POLARITY_MISMATCH', msg),
 
   termReadonly: (msg = '学期已归档，禁止写入账本') => err('TERM_READONLY', msg),
   studentNoSeat: (students: string[]) =>

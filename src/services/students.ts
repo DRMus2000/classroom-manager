@@ -154,7 +154,7 @@ export async function createStudent(
       entity: 'student',
       entity_id: created.student_id,
       action: 'created',
-      after: { student_no: created.student_no, name: created.name, seat_id: input.seat_id },
+      after: { seat_id: input.seat_id },
       request_id: input.request_id,
     });
 
@@ -206,8 +206,8 @@ export async function patchStudent(
       entity: 'student',
       entity_id: studentId,
       action: 'updated',
-      before: { student_no: before.student_no, name: before.name, remark: before.remark },
-      after: { student_no: after.student_no, name: after.name, remark: after.remark },
+      before: { remark: before.remark },
+      after: { remark: after.remark },
       request_id: input.request_id,
     });
 
@@ -277,7 +277,7 @@ export async function leaveStudent(
       entity: 'student',
       entity_id: studentId,
       action: 'left',
-      before: { status: 'active', name: student.name },
+      before: { status: 'active' },
       after: { status: 'left', reason: input.reason, note: input.note ?? null },
       request_id: input.request_id,
     });
@@ -489,7 +489,8 @@ async function exportAnonLedger(tx: Tx, prepared: PreparedAnon[]): Promise<strin
   let entryIds: string[];
   try {
     entryIds = await appendAnonLedgerEntries(prepared.map((item) => item.ledger));
-  } catch {
+  } catch (err) {
+    console.error('匿名账本写入失败', err);
     throw Errors.internal('外部匿名账本写入失败，本次匿名化已回滚');
   }
   if (entryIds.length !== prepared.length || entryIds.some((id) => !id)) {
