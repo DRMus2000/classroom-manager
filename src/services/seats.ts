@@ -7,7 +7,7 @@
  * - 积分快照记录操作当时的座位号（永不回溯），故换座不修改任何历史明细。
  */
 
-import { type Db, db as defaultDb } from '../repo/db.js';
+import { type Db, db as defaultDb, sql } from '../repo/db.js';
 import { idempotentTx } from './idempotency.js';
 import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
@@ -40,22 +40,41 @@ export async function getClassSeats(
 
   const activeStudents = await studentRepo.listActiveStudentsWithSeats(db, classId);
 
-  const [seats, marks, rawColumns, balances] = await Promise.all([
+  const studentIds = activeStudents.map((s) => s.student_id);
+  const [seats, marks, rawColumns, balances, dutyTerms] = await Promise.all([
     studentRepo.listClassSeats(db, classId),
-    studentRepo.listStudentMarks(
-      db,
-      activeStudents.map((s) => s.student_id),
-    ),
+    studentRepo.listStudentMarks(db, studentIds),
     layoutRepo.listColumns(db),
-    pointsRepo.listBalancesForStudents(
-      db,
-      termId,
-      activeStudents.map((s) => s.student_id),
+    pointsRepo.listBalancesForStudents(db, termId, studentIds),
+    db.execute<{
+      student_id: string;
+      duty_term_id: string;
+      completed_count: number;
+      required_count: number;
+      status: 'active' | 'retired' | 'released';
+    }>(
+      sql`SELECT t.student_id, t.duty_term_id, t.completed_count, t.required_count, t.status
+          FROM duty_term t
+          JOIN duty_line l ON l.line_id = t.line_id
+          WHERE l.class_id = ${classId}
+            AND t.status = 'active'
+            AND t.started_round_id IS NOT NULL`,
     ),
   ]);
 
   const activeSeatByStudent = new Map(
     activeStudents.filter((s) => s.seat).map((s) => [s.student_id, s]),
+  );
+  const dutyByStudent = new Map(
+    dutyTerms.map((term) => [
+      term.student_id,
+      {
+        duty_term_id: term.duty_term_id,
+        completed_count: Number(term.completed_count),
+        required_count: Number(term.required_count),
+        status: term.status,
+      },
+    ]),
   );
 
   const cards: SeatCardDto[] = seats.map((seat) => {
@@ -73,7 +92,7 @@ export async function getClassSeats(
             student_no: student.student_no,
             balance: balances.get(student.student_id) ?? 0,
             marks: marks.get(student.student_id) ?? [],
-            duty: null, // 第二阶段填充
+            duty: dutyByStudent.get(student.student_id) ?? null,
           }
         : null,
     };

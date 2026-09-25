@@ -10,7 +10,7 @@
  * 已执行迁移的 checksum 变化会报警（防止篡改历史迁移）。
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, access } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,20 @@ import { applySeatNumbers } from '../src/repo/layout.js';
 import type { SeatDirection } from '../src/lib/schema.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+
+/** tsx 从 scripts/ 往上看；编译后从 dist/scripts/ 再往上一层，对应镜像里的 /app/migrations。 */
+async function migrationsDir(): Promise<string> {
+  const candidates = [join(__dirname, '..', 'migrations'), join(__dirname, '..', '..', 'migrations')];
+  for (const dir of candidates) {
+    try {
+      await access(dir);
+      return dir;
+    } catch {
+      // 试下一个位置
+    }
+  }
+  throw new Error(`找不到迁移目录，已查找：${candidates.join('、')}`);
+}
 
 interface MigrationFile {
   filename: string;
@@ -39,13 +52,14 @@ async function ensureMigrationsTable(): Promise<void> {
 }
 
 async function loadMigrations(): Promise<MigrationFile[]> {
-  const files = (await readdir(MIGRATIONS_DIR))
+  const migrationsDirPath = await migrationsDir();
+  const files = (await readdir(migrationsDirPath))
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
   const out: MigrationFile[] = [];
   for (const filename of files) {
-    const content = await readFile(join(MIGRATIONS_DIR, filename), 'utf8');
+    const content = await readFile(join(migrationsDirPath, filename), 'utf8');
     out.push({
       filename,
       sql: content,

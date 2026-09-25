@@ -123,7 +123,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_class_name_active
 CREATE TABLE IF NOT EXISTS term (
   term_id    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name       text NOT NULL,
-  status     term_status NOT NULL DEFAULT 'open',
+  status     term_status NOT NULL DEFAULT 'closed',
   is_current boolean NOT NULL DEFAULT false,
   started_at timestamptz NOT NULL DEFAULT now(),
   closed_at  timestamptz

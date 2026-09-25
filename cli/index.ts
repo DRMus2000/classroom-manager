@@ -11,7 +11,6 @@
  * 密码通过交互式隐藏输入提供，避免进入命令历史（第14项）。
  */
 
-import { createInterface } from 'node:readline';
 import { db, withTx, sql, closeDb } from '../src/repo/db.js';
 import * as authRepo from '../src/repo/auth.js';
 import * as pointsRepo from '../src/repo/points.js';
@@ -21,43 +20,48 @@ import { assertRestoreTarget, dumpWithPgDump, measureDiskFree, openBackupDownloa
 import { reapplyAnonLedger, retryFailedLedgerExports } from '../src/services/anonMaintenance.js';
 import { hashPassword } from '../src/lib/crypto.js';
 
-/** 交互式读取隐藏输入（不回显）。 */
+/** 交互式读取隐藏输入（不回显）。管道输入按行拆开，一次读入的两行不会丢掉第二行。 */
+let pendingInput = '';
+let inputListening = false;
+const inputWaiters: Array<(line: string) => void> = [];
+
+function takeLine(): string | null {
+  const nl = pendingInput.indexOf('\n');
+  if (nl < 0) return null;
+  const line = pendingInput.slice(0, nl).replace(/\r$/, '');
+  pendingInput = pendingInput.slice(nl + 1);
+  return line;
+}
+
+function ensureInput(): void {
+  if (inputListening) return;
+  inputListening = true;
+  const stdin = process.stdin;
+  if (stdin.isTTY) stdin.setRawMode(true);
+  stdin.resume();
+  stdin.on('data', (chunk: Buffer) => {
+    pendingInput += chunk.toString('utf8');
+    while (inputWaiters.length > 0) {
+      const line = takeLine();
+      if (line == null) return;
+      inputWaiters.shift()?.(line);
+    }
+  });
+}
+
 function promptHidden(question: string): Promise<string> {
+  process.stdout.write(question);
+  ensureInput();
+  const ready = takeLine();
+  if (ready != null) {
+    process.stdout.write('\n');
+    return Promise.resolve(ready);
+  }
   return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-
-    process.stdout.write(question);
-
-    // 关闭回显
-    const onData = (char: Buffer) => {
-      const str = char.toString('utf8');
-      if (str === '\n' || str === '\r' || str === '\u0004') {
-        stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        resolve(buffer.trim());
-        rl.close();
-        if (stdin.isTTY && wasRaw !== undefined) stdin.setRawMode(wasRaw);
-      } else if (str === '\u0003') {
-        // Ctrl+C
-        process.stdout.write('\n');
-        process.exit(130);
-      } else if (str === '\u007f' || str === '\b') {
-        // Backspace
-        if (buffer.length > 0) {
-          buffer = buffer.slice(0, -1);
-        }
-      } else {
-        buffer += str;
-      }
-    };
-
-    let buffer = '';
-    if (stdin.isTTY) stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on('data', onData);
+    inputWaiters.push((line) => {
+      process.stdout.write('\n');
+      resolve(line);
+    });
   });
 }
 

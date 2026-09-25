@@ -27,7 +27,7 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
     if (databaseDir) await rm(databaseDir, { recursive: true, force: true });
   });
 
-  it('执行两份迁移，重复执行成功，种子列方向与设计一致', async () => {
+  it('执行迁移，重复执行成功，种子列方向与设计一致', async () => {
     databaseDir = await mkdtemp(path.join(tmpdir(), 'classroom-pg16-'));
     postgres = new EmbeddedPostgres({
       databaseDir,
@@ -184,7 +184,13 @@ describe('postgres 16 migrations', { timeout: 180_000 }, () => {
       );
       assert.deepEqual(
         applied.rows.map((row) => row.filename),
-        ['001_phase1_core.sql', '002_phase2_duty_marks.sql', '003_term_open_return_new.sql', '004_point_batch_note.sql'],
+        [
+          '001_phase1_core.sql',
+          '002_phase2_duty_marks.sql',
+          '003_term_open_return_new.sql',
+          '004_point_batch_note.sql',
+          '005_term_default_closed.sql',
+        ],
       );
 
       const cls = await check.query<{ class_id: string }>(
