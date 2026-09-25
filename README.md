@@ -88,7 +88,7 @@ cd web && npm ci && npm run dev
 ## 项目结构
 
 ```
-classroom-manager/
+it-classroom-points/
 ├── migrations/          # SQL 迁移（001 核心到 005 学期默认关闭）
 ├── src/
 │   ├── domain/         # 纯领域逻辑（renumber、seatMove、points 等）
