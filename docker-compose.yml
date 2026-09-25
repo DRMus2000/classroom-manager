@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -85,6 +83,8 @@ services:
     networks:
       - classroom_net
     restart: unless-stopped
+    healthcheck:
+      disable: true
     command: ["node", "dist/scripts/backup-scheduler.js"]
 
   nginx:

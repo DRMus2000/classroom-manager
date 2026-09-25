@@ -24,6 +24,13 @@ coverage/
 .nyc_output/
 .cache/
 
+# 本地演示库。seed 脚本会写到这里，不入库。
+.demo/pg/
+.demo/ledger/
+
+# 本地或自签证书。生产证书由部署机器提供，不入库。
+certs/
+
 # 备份与匿名化账本（含身份或密钥材料，不得入库）
 backups/
 *.dump

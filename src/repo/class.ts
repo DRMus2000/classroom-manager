@@ -136,7 +136,7 @@ export async function findTerm(db: Db | Tx, termId: string): Promise<TermRow | n
 /** 创建学期（不自动切换）。 */
 export async function createTerm(db: Db | Tx, name: string): Promise<TermRow> {
   const rows = await db.execute<TermRow>(
-    sql`INSERT INTO term (name, status, is_current) VALUES (${name}, 'open', false)
+    sql`INSERT INTO term (name, status, is_current) VALUES (${name}, 'closed', false)
         RETURNING term_id, name, status, is_current, started_at, closed_at`,
   );
   return rows[0]!;

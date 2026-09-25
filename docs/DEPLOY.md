@@ -31,7 +31,7 @@ npm run migrate up
 npm run dev
 ```
 
-另一个终端运行 `cd web && npm ci && npm run dev`。API 在 `http://localhost:3000`。`migrate up` 执行 `001` 到 `004`。创建账号用 `npm run cli -- create-teacher --username teacher`。
+另一个终端运行 `cd web && npm ci && npm run dev`。API 在 `http://localhost:3000`。`migrate up` 执行 `001` 到 `005`。创建账号用 `npm run cli -- create-teacher --username teacher`。密码从隐藏输入读取，管道里的两行不会丢掉第二行。
 
 生产：
 
@@ -41,11 +41,11 @@ docker compose exec api node dist/scripts/migrate.js up
 docker compose exec api node dist/cli/index.js create-teacher --username teacher
 ```
 
-镜像构建阶段安装全部依赖并执行 `tsc`，运行阶段只保留生产依赖，并安装 `postgresql16-client`。
+镜像构建阶段安装全部依赖并执行 `tsc`，运行阶段只保留生产依赖，并安装 `postgresql16-client`。编译结果在 `dist/src`、`dist/scripts` 和 `dist/cli`。容器入口先以 root 修正可写的备份卷和匿名账本卷，只读备份卷会跳过，再降到 `nodejs` 用户运行。备份容器不提供 HTTP，因此关闭了镜像自带的 `/healthz` 检查。
 
 ## 3. HTTPS
 
-Nginx 的 443 提供前端静态资源、`/api/`、`/api/v1/events` 和 `/healthz`。把可信证书放到 `./certs/fullchain.pem` 和 `./certs/privkey.pem`。登录响应的 `Set-Cookie` 在 `HTTPS_ENABLED=true` 时包含 `Secure`。
+Nginx 的 443 提供前端静态资源、`/api/`、`/api/v1/events` 和 `/healthz`。把可信证书放到 `./certs/fullchain.pem` 和 `./certs/privkey.pem`。目录为空时入口脚本会安装 openssl 并生成自签证书；如果构建机访问不到 Alpine 软件源，先在宿主机生成这两个文件再启动。登录响应的 `Set-Cookie` 在 `HTTPS_ENABLED=true` 时包含 `Secure`。
 
 ## 4. 备份与恢复
 

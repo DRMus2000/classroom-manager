@@ -18,7 +18,7 @@ const PASSWORD = 'classroom_password';
 const DATABASE = 'classroom_manager';
 const KEY = 'cd'.repeat(32);
 
-describe('anonymize rolls back when the ledger fails', { timeout: 180_000 }, () => {
+describe('anonymize keeps a pending export when the ledger fails', { timeout: 180_000 }, () => {
   let databaseDir = '';
   let ledgerDir = '';
   let postgres: EmbeddedPostgres | undefined;
@@ -32,7 +32,7 @@ describe('anonymize rolls back when the ledger fails', { timeout: 180_000 }, () 
     if (ledgerDir) await rm(ledgerDir, { recursive: true, force: true });
   });
 
-  it('单人与整班都在账本失败时保持原姓名，成功后可重放', async () => {
+  it('单人与整班都在账本失败时保留待导出意图，修好密钥后可补写', async () => {
     databaseDir = await mkdtemp(path.join(tmpdir(), 'classroom-anon-pg-'));
     ledgerDir = await mkdtemp(path.join(tmpdir(), 'classroom-anon-ledger-'));
     postgres = new EmbeddedPostgres({
@@ -131,7 +131,11 @@ describe('anonymize rolls back when the ledger fails', { timeout: 180_000 }, () 
         assert.equal(err.code, 'INTERNAL');
         return true;
       });
-      assert.deepEqual(await namesOf(client, [li, wang]), ['李四', '王五']);
+      assert.deepEqual(await namesOf(client, [li, wang]), ['', '']);
+      const classPending = await client.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM anon_ledger_export WHERE state = 'pending'`,
+      );
+      assert.equal(classPending.rows[0]?.n, 2);
       process.env['ANON_LEDGER_KEY'] = KEY;
       assert.equal((await readLedger()).length, 1);
       const batch = await anonymizeClass(actorId, classId, classRequest);

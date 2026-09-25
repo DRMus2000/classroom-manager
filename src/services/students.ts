@@ -365,7 +365,7 @@ interface PreparedAnon {
 
 /**
  * 匿名化：去除姓名、学号和身份备注，历史数值及事件保留。
- * 外部账本写入失败时抛错，数据库事务整体回滚。
+ * 先提交库内意图。外部账本写入失败时身份保持清空，导出状态留待同一 request_id 重试。
  */
 export async function anonymizeStudent(
   actorId: string,

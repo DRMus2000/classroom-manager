@@ -64,7 +64,7 @@
 | POST | `/classes` | `{name, request_id}` |
 | PATCH | `/classes/:id` | 改名或归档 |
 | GET | `/terms` | 含 `is_current`、`status` |
-| POST | `/terms` | `{name, request_id}`。不自动切换 |
+| POST | `/terms` | `{name, request_id}`。新建为 `closed`，不自动切换。激活后才成为唯一的 `open` 学期 |
 | POST | `/terms/:id/activate` | `{expected_current_term_id, request_id}`。`expected_current_term_id` 为调用时看到的当前学期，没有当前学期时为 `null`。全局切换：旧学期只读，在班学生余额初始化为 0。座次、标记、未结束卫生不动 |
 | GET | `/terms/:id/summary` | 只读汇总：总分、流水条数 |
 
@@ -460,7 +460,7 @@
 }
 ```
 
-空座位的 `student` 为 `null`。当前座位接口即使有卫生任期也返回 `duty: null`；前端另取 `/classes/:id/duty` 合成徽章。全屏展示使用同一响应，页面不渲染 `remark`。学生详情里的备注只在管理接口 `GET /classes/:id/students` 返回。
+空座位的 `student` 为 `null`。`student.duty` 是已经开始计次的在任任期（`status = active` 且 `started_round_id` 已写入）。下一轮新任仍只出现在 `GET /classes/:id/duty` 的 `next_appointees`，座位卡不提前显示。全屏展示使用同一响应，页面不渲染 `remark`。学生详情里的备注只在管理接口 `GET /classes/:id/students` 返回。
 
 ### 积分
 

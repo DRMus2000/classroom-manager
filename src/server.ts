@@ -85,6 +85,7 @@ import {
   excludeRollcallInput,
   closeRollcallInput,
   countdownCommandInput,
+  ERROR_HTTP_STATUS,
 } from './lib/schema.js';
 
 const SESSION_COOKIE = 'session';
@@ -139,6 +140,17 @@ async function currentTermId(): Promise<string> {
   return term.term_id;
 }
 
+function postgresErrorCode(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === 'object'; depth += 1) {
+    if ('code' in current && typeof current.code === 'string' && /^[0-9A-Z]{5}$/.test(current.code)) {
+      return current.code;
+    }
+    current = 'cause' in current ? current.cause : null;
+  }
+  return null;
+}
+
 export async function buildServer() {
   const app = Fastify({ logger: true, trustProxy: trustProxyFromEnv() });
   await app.register(cookie);
@@ -168,6 +180,15 @@ export async function buildServer() {
           code: 'IMPORT_INVALID',
           message: '导入文件校验失败',
           details: { issues: [{ code: 'FILE_TOO_LARGE', message: '文件超过 2MB' }] },
+          request_id: request.id,
+        },
+      });
+    }
+    if (postgresErrorCode(error) === '55006') {
+      return reply.status(ERROR_HTTP_STATUS.TERM_READONLY).send({
+        error: {
+          code: 'TERM_READONLY',
+          message: '学期已归档，禁止写入账本',
           request_id: request.id,
         },
       });
