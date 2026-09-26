@@ -1030,6 +1030,21 @@ button.manage-row-main {
   margin-left: auto;
 }
 
+.manage-password {
+  grid-column: 1 / -1;
+}
+
+.manage-password-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.manage-password-form .field {
+  margin-bottom: 0;
+}
+
 .layout-page {
   display: flex;
   flex-direction: column;
@@ -4086,6 +4101,14 @@ button.manage-row-main {
 
   .layout-room {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .manage-password-form {
+    grid-template-columns: 1fr;
+  }
+
+  .manage-password-form .btn {
+    width: 100%;
   }
 }
 

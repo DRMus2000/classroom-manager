@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api } from '../../lib/api';
+import { useState, type FormEvent } from 'react';
+import { ApiError, api } from '../../lib/api';
 import type { ClassDto, TermDto, TermSummaryDto } from '../../lib/types';
 import { useApp } from '../../hooks/useApp';
 import { useResource } from '../../hooks/useResource';
@@ -34,7 +34,101 @@ export function ManagePage() {
           </a>
         </header>
       </section>
+      <PasswordSection />
     </div>
+  );
+}
+
+function PasswordSection() {
+  const { toast } = useApp();
+  const write = useWrite();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [formError, setFormError] = useState('');
+  const mismatch = again.length > 0 && again !== next;
+  const short = next.length > 0 && next.length < 12;
+  const ready = current.length > 0 && next.length >= 12 && again === next;
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (!ready) return;
+    setFormError('');
+    const ok = await write.run(
+      { op: 'change-password', old_password: current, new_password: next },
+      (requestId) =>
+        api<{ ok: true }>('/auth/password', {
+          method: 'POST',
+          requestId,
+          body: { old_password: current, new_password: next },
+        }),
+      {
+        onError: (err) => {
+          if (err instanceof ApiError && err.code === 'UNAUTHENTICATED' && err.message.includes('原密码')) {
+            setFormError('当前密码不对');
+            return true;
+          }
+          return false;
+        },
+      },
+    );
+    if (!ok) return;
+    setCurrent('');
+    setNext('');
+    setAgain('');
+    toast({ tone: 'success', title: '密码已更新', detail: '其他设备需要重新登录，这台电脑保持登录。' });
+  }
+
+  return (
+    <section className="card manage-password" id="password">
+      <header className="card-head">
+        <div>
+          <h2>修改密码</h2>
+          <p className="muted small">至少 12 位。保存后其他设备要重新登录，这台电脑保持登录。忘了当前密码时，仍要在服务器上重置。</p>
+        </div>
+      </header>
+      <form className="manage-password-form" onSubmit={(e) => void save(e)}>
+        <label className="field">
+          <span>当前密码</span>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            aria-label="当前密码"
+            onChange={(e) => {
+              setCurrent(e.target.value);
+              setFormError('');
+            }}
+          />
+        </label>
+        <label className="field">
+          <span>新密码</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            aria-label="新密码"
+            onChange={(e) => setNext(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>再输入一次</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={again}
+            aria-label="再输入一次新密码"
+            onChange={(e) => setAgain(e.target.value)}
+          />
+        </label>
+        <button type="submit" className="btn btn-primary" disabled={write.disabled || !ready}>
+          保存新密码
+        </button>
+      </form>
+      {short ? <p className="manage-note">新密码至少 12 位，还差 {12 - next.length} 位。</p> : null}
+      {mismatch ? <p className="manage-note">两次输入的新密码不一致。</p> : null}
+      {formError ? <p className="form-error" role="alert">{formError}</p> : null}
+    </section>
   );
 }
 

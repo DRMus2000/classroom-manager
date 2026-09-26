@@ -683,7 +683,6 @@ SSE 的 `data` 为：
 
 | 范围 | 已注册、页面未调用 |
 |---|---|
-| 认证 | `POST /auth/password` |
 | 匿名化 | `POST /students/:id/anonymize`、`POST /classes/:id/anonymize`。名单页会调用学生的新增、修改、离班、恢复，以及导入模板、预览和提交 |
 | 标记 | `POST /marks`、`PATCH /marks/:id`、`POST /students/:id/marks/:mark_id`、`DELETE /students/:id/marks/:mark_id`。`GET /marks` 会加载，有标记时座位卡会显示 |
 | 原因模板 | `POST /templates`、`PATCH /templates/:id`、`POST /classes/:id/templates`、`POST /classes/:id/templates/:template_id/override`、`DELETE /classes/:id/templates/:template_id/override`。`GET /classes/:id/templates` 只用于记分栏展示 |
@@ -691,4 +690,4 @@ SSE 的 `data` 为：
 | 卫生与点名 | `GET /duty/rounds/:id`、`GET /rollcall/rounds/:id`。当前轮次分别来自 `GET /classes/:id/duty` 和 `GET /classes/:id/rollcall` |
 | 导出、审计、备份 | `GET /classes/:id/export/roster`、`GET /export/points`、`GET /audit`、`GET /backup/records`、`GET /backup/download/:backup_id`。`GET /export/leaderboard` 由榜单页的「导出」链接打开 |
 
-页面会调用的写操作：登录、退出、退出其他设备、建立学期、激活学期、建班、改名、归档和恢复、新增学生、修改学生、离班、恢复、导入预览与提交、布局预览与提交、换座预览与提交、记分、整批撤销、单条撤销、卫生轮次的开始到结束（含抽选确认与纠正）、点名的开始、抽取、排除和结束、倒计时的 `PUT`。读操作还包括班级（管理页带 `include_archived=true`）、学期、学期汇总、学生列表、导入模板下载、机房布局、座位、模板、标记、积分时间线、榜单、回放三支、当前点名、倒计时、`GET /events` 和 `/healthz`。
+页面会调用的写操作：登录、退出、退出其他设备、修改密码、建立学期、激活学期、建班、改名、归档和恢复、新增学生、修改学生、离班、恢复、导入预览与提交、布局预览与提交、换座预览与提交、记分、整批撤销、单条撤销、卫生轮次的开始到结束（含抽选确认与纠正）、点名的开始、抽取、排除和结束、倒计时的 `PUT`。读操作还包括班级（管理页带 `include_archived=true`）、学期、学期汇总、学生列表、导入模板下载、机房布局、座位、模板、标记、积分时间线、榜单、回放三支、当前点名、倒计时、`GET /events` 和 `/healthz`。

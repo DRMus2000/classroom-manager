@@ -287,6 +287,18 @@ function UserMenu() {
       </button>
       {open ? (
         <div className="menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              window.location.hash = '/manage';
+              window.setTimeout(() => document.getElementById('password')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+            }}
+          >
+            <Icon name="lock" size={16} />
+            修改密码
+          </button>
           <button type="button" role="menuitem" disabled={write.disabled} onClick={() => void logoutOthers()}>
             <Icon name="users" size={16} />
             退出其他设备
