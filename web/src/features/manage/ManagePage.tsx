@@ -46,6 +46,18 @@ export function ManagePage() {
           </a>
         </header>
       </section>
+      <section className="card manage-layout">
+        <header className="card-head">
+          <div>
+            <h2>审计和备份</h2>
+            <p className="muted small">查看操作记录，下载每天的数据库备份。恢复要在另一台数据库上做。</p>
+          </div>
+          <a className="btn btn-primary" href="#/records">
+            查看记录
+            <Icon name="arrowRight" size={16} />
+          </a>
+        </header>
+      </section>
       <PasswordSection />
     </div>
   );

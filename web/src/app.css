@@ -1117,6 +1117,44 @@ button.manage-row-main {
   margin-bottom: 10px;
 }
 
+.records {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.records-row {
+  align-items: flex-start;
+}
+
+.records-detail {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.records-detail summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.records-more {
+  margin-top: 14px;
+}
+
+.records-detail pre {
+  margin: 8px 0 0;
+  max-width: 420px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 .layout-page {
   display: flex;
   flex-direction: column;
