@@ -42,6 +42,7 @@ const PATHS = {
   more: 'M12 5h.01M12 12h.01M12 19h.01',
   arrowRight: 'M5 12h14M13 6l6 6-6 6',
   bell: 'M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0',
+  settings: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4',
 } as const;
 
 export type IconName = keyof typeof PATHS;

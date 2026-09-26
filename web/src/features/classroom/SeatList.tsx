@@ -36,7 +36,7 @@ export function SeatList(props: {
               <em>{columnGlyph(card.column_code)}</em>
             </span>
             <span className="seatrow-name">
-              {s ? s.name || '匿名' : '空座'}
+              {s ? s.name || s.anon_code || '匿名' : '空座'}
               {s ? <small>{s.student_no}</small> : null}
             </span>
             <span className="seatrow-meta">

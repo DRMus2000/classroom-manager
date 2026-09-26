@@ -80,10 +80,14 @@ interface AppContextValue {
   recheck: () => void;
   sse: SseStatus;
   classes: ClassDto[];
+  /** 班级列表已经返回，或请求失败。用来区分「还在加载」和「确实没有班级」。 */
+  classesKnown: boolean;
+  classesError: unknown;
   classId: string;
   setClassId: (id: string) => void;
   currentClass: ClassDto | null;
   terms: TermDto[];
+  termsKnown: boolean;
   currentTerm: TermDto | null;
   seats: ClassSeatsDto | null;
   seatsLoading: boolean;
@@ -235,7 +239,7 @@ export function AppProvider(props: { me: MeDto; onSignedOut: () => void; childre
       .filter((c) => c.student)
       .map((c) => ({
         student_id: c.student!.student_id,
-        name: c.student!.name,
+        name: c.student!.name || c.student!.anon_code || '匿名',
         student_no: c.student!.student_no,
         seat_id: c.seat_id,
         seat_number: c.seat_number,
@@ -311,10 +315,13 @@ export function AppProvider(props: { me: MeDto; onSignedOut: () => void; childre
     recheck: status.recheck,
     sse,
     classes,
+    classesKnown: classesRes.data !== null || classesRes.error != null,
+    classesError: classesRes.error,
     classId: validClass,
     setClassId,
     currentClass: classes.find((c) => c.class_id === validClass) ?? null,
     terms: termsRes.data ?? [],
+    termsKnown: termsRes.data !== null || termsRes.error != null,
     currentTerm,
     seats: seatsRes.data && seatsRes.data.class_id === validClass ? seatsRes.data : null,
     seatsLoading: seatsRes.loading,

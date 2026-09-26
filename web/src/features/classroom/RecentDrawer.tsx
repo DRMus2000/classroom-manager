@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { API_BASE, api } from '../../lib/api';
 import type { BatchResultDto, Page, TimelineEventDto } from '../../lib/types';
 import { formatDateTime, signed } from '../../lib/format';
 import { useApp } from '../../hooks/useApp';
@@ -64,6 +64,15 @@ export function RecentDrawer(props: { open: boolean; onClose: () => void }) {
               {currentClass?.name} · {currentTerm?.name}
             </p>
           </div>
+          {classId && termId ? (
+            <a
+              className="btn btn-ghost btn-sm"
+              href={`${API_BASE}/export/points?${new URLSearchParams({ class_id: classId, term_id: termId, include_reversals: 'true' }).toString()}`}
+            >
+              <Icon name="download" size={16} />
+              导出明细
+            </a>
+          ) : null}
           <OfflineHint />
           <button type="button" className="icon-btn" onClick={props.onClose} aria-label="关闭">
             <Icon name="x" />

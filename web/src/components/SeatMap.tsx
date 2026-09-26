@@ -308,12 +308,12 @@ const SeatCard = memo(function SeatCard(props: SeatCardProps) {
       onClick={props.onClick ? (e) => props.onClick!(card, e) : undefined}
       tabIndex={props.onClick ? 0 : -1}
       aria-pressed={props.onClick && student ? props.selected : undefined}
-      aria-label={student ? `${card.seat_number ?? ''}号 ${student.name}` : `${card.seat_number ?? ''}号 空座`}
+      aria-label={student ? `${card.seat_number ?? ''}号 ${student.name || student.anon_code || '匿名'}` : `${card.seat_number ?? ''}号 空座`}
     >
       <span className="seat-pc" aria-hidden="true" />
       <span className="seat-no">{card.seat_number ?? '—'}</span>
       <span className="seat-body">
-        <span className="seat-name">{student ? student.name || '匿名' : '空座'}</span>
+        <span className="seat-name">{student ? student.name || student.anon_code || '匿名' : '空座'}</span>
         {student && (studentMarks.length > 0 || duty) ? (
           <span className="seat-meta">
             {duty ? (

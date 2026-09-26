@@ -88,17 +88,24 @@ export async function patchMark(
     );
     if (before.length === 0) throw Errors.notFound('标记', markId);
 
+    const sets = [];
+    if (patch.name !== undefined) sets.push(sql`name = ${patch.name}`);
+    if (patch.icon !== undefined) sets.push(sql`icon = ${patch.icon}`);
+    if (patch.color !== undefined) sets.push(sql`color = ${patch.color}`);
+    if (patch.sort_order !== undefined) sets.push(sql`sort_order = ${patch.sort_order}`);
+    if (patch.archived === true) sets.push(sql`archived_at = now()`);
+    if (patch.archived === false) sets.push(sql`archived_at = NULL`);
+    if (sets.length === 0) {
+      return {
+        mark_id: before[0]!.mark_id,
+        name: before[0]!.name,
+        icon: before[0]!.icon,
+        color: before[0]!.color,
+        sort_order: before[0]!.sort_order,
+      };
+    }
     const rows = await tx.execute<studentRepo.MarkDefRow>(
-      sql`UPDATE mark_def
-          SET name = COALESCE(${patch.name ?? null}, name),
-              icon = COALESCE(${patch.icon ?? null}, icon),
-              color = COALESCE(${patch.color ?? null}, color),
-              sort_order = COALESCE(${patch.sort_order ?? null}, sort_order),
-              archived_at = CASE
-                WHEN ${patch.archived === undefined}::boolean THEN archived_at
-                WHEN ${patch.archived === true}::boolean THEN now()
-                ELSE NULL
-              END
+      sql`UPDATE mark_def SET ${sql.join(sets, sql`, `)}
           WHERE mark_id = ${markId}
           RETURNING mark_id, name, icon, color, sort_order, archived_at`,
     );

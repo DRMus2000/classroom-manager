@@ -7,9 +7,11 @@ import type {
   ClassDto,
   ClassSeatsDto,
   EffectiveTemplateDto,
+  LeftReason,
   MarkDefDto,
   ReplayMode,
   SeatCardDto,
+  StudentDto,
   TermDto,
   TimelineEventDto,
 } from './schema';
@@ -19,9 +21,11 @@ export type {
   ClassDto,
   ClassSeatsDto,
   EffectiveTemplateDto,
+  LeftReason,
   MarkDefDto,
   ReplayMode,
   SeatCardDto,
+  StudentDto,
   TermDto,
   TimelineEventDto,
 };
@@ -168,4 +172,67 @@ export interface CountdownDto {
 export interface Page<T> {
   items: T[];
   next_cursor: string | null;
+}
+
+export interface ImportIssueDto {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  sheet: string;
+  cell: string | null;
+  row: number | null;
+  student_no: string | null;
+}
+
+export interface ImportChangeDto {
+  kind: 'create' | 'update' | 'keep';
+  student_no: string;
+  name: string;
+  student_id: string | null;
+  from_seat_number: number | null;
+  to_seat_number: number | null;
+  name_changed: boolean;
+}
+
+export interface ImportPreviewDto {
+  preview_token: string;
+  template_kind: 'rows' | 'seatmap';
+  issues: ImportIssueDto[];
+  changes: ImportChangeDto[];
+  summary: {
+    create: number;
+    update: number;
+    keep: number;
+    seat_changes: number;
+    errors: number;
+    warnings: number;
+  };
+  committable: boolean;
+  blockers: { code: string; message: string }[];
+}
+
+export interface ImportCommitResultDto {
+  seat_version: number;
+  applied: { create: number; update: number };
+}
+
+export interface LayoutImpactDto {
+  kind: 'insert_slot' | 'move_slot' | 'delete_slot' | 'change_column' | 'renumber';
+  affected_classes: {
+    class_id: string;
+    name: string;
+    students_moved: number;
+    seat_assignments_removed: number;
+  }[];
+  renumber_diff: { seat_id: string; old: number | null; new: number }[];
+  blockers: { code: string; message: string }[];
+  preview_hash: string;
+}
+
+export interface TermSummaryDto {
+  term: TermDto;
+  total_batches: number;
+  total_entries: number;
+  total_reversals: number;
+  students_scored: number;
 }

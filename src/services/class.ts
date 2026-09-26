@@ -12,7 +12,7 @@ import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
 import { writeEvent } from './publishEvent.js';
 import { idempotentTx } from './idempotency.js';
-import { Errors } from '../lib/errors.js';
+import { AppError, Errors } from '../lib/errors.js';
 import { toIsoTimestamp } from '../lib/time.js';
 import type {
   ClassDto,
@@ -30,6 +30,21 @@ function iso(value: Date | string): string {
 
 function isoOrNull(value: Date | string | null | undefined): string | null {
   return value == null ? null : iso(value);
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === 'object'; depth += 1) {
+    if ('code' in current && (current as { code: unknown }).code === '23505') return true;
+    current = 'cause' in current ? (current as { cause: unknown }).cause : null;
+  }
+  return false;
+}
+
+function duplicateClassName(): AppError {
+  return new AppError('VALIDATION_FAILED', '已有同名的在用班级', {
+    issues: [{ path: ['name'], message: '已有同名的在用班级' }],
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -68,7 +83,10 @@ export async function createClass(
   db: Db = defaultDb,
 ): Promise<ClassDto> {
   return idempotentTx(db, input.request_id, 'POST /api/v1/classes', input, async (tx) => {
-    const cls = await classRepo.createClass(tx, input.name);
+    const cls = await classRepo.createClass(tx, input.name).catch((error: unknown) => {
+      if (isUniqueViolation(error)) throw duplicateClassName();
+      throw error;
+    });
 
     await auditRepo.writeAudit(tx, {
       actor: actorId,
@@ -112,6 +130,9 @@ export async function patchClass(
     const after = await classRepo.updateClass(tx, classId, {
       name: input.name,
       archived: input.archived,
+    }).catch((error: unknown) => {
+      if (isUniqueViolation(error)) throw duplicateClassName();
+      throw error;
     });
     if (!after) throw Errors.notFound('班级', classId);
 

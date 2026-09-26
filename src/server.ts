@@ -319,7 +319,12 @@ export async function buildServer() {
 
   app.get('/api/v1/classes', async (request) => {
     await requireUser(request);
-    return classService.listClasses(false);
+    const query = parse<{ include_archived?: 'true' | 'false' | '1' | '0' }>(
+      z.object({ include_archived: z.enum(['true', 'false', '1', '0']).optional() }),
+      request.query,
+    );
+    const includeArchived = query.include_archived === 'true' || query.include_archived === '1';
+    return classService.listClasses(includeArchived);
   });
 
   app.post('/api/v1/classes', async (request) => {

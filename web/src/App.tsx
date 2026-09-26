@@ -5,7 +5,7 @@ import { AppProvider, useApp } from './hooks/useApp';
 import { useWrite } from './hooks/useWrite';
 import { Icon, type IconName } from './components/Icon';
 import { Logo } from './components/Logo';
-import { ConflictDialog, Spinner, Toasts } from './components/ui';
+import { ConflictDialog, EmptyState, Spinner, Toasts } from './components/ui';
 import { SyncStatus } from './components/SyncStatus';
 import { Login } from './features/Login';
 import { ClassroomPage } from './features/classroom/ClassroomPage';
@@ -13,10 +13,15 @@ import { DutyPage } from './features/duty/DutyPage';
 import { BoardPage } from './features/board/BoardPage';
 import { ToolsPage } from './features/tools/ToolsPage';
 import { ScreenPage } from './features/screen/ScreenPage';
+import { ManagePage } from './features/manage/ManagePage';
+import { RosterPage } from './features/roster/RosterPage';
+import { LayoutPage } from './features/layout/LayoutPage';
+import { CatalogPage } from './features/catalog/CatalogPage';
+import { RecordsPage } from './features/records/RecordsPage';
 
-type Route = 'class' | 'duty' | 'board' | 'tools' | 'screen';
+type Route = 'class' | 'duty' | 'board' | 'tools' | 'screen' | 'manage' | 'roster' | 'layout' | 'catalog' | 'records';
 
-const NAV: { id: Exclude<Route, 'screen'>; label: string; icon: IconName }[] = [
+const NAV: { id: Exclude<Route, 'screen' | 'manage'>; label: string; icon: IconName }[] = [
   { id: 'class', label: '课堂', icon: 'seat' },
   { id: 'duty', label: '卫生', icon: 'broom' },
   { id: 'board', label: '榜单', icon: 'trophy' },
@@ -25,7 +30,7 @@ const NAV: { id: Exclude<Route, 'screen'>; label: string; icon: IconName }[] = [
 
 function readRoute(): Route {
   const id = window.location.hash.replace(/^#\/?/, '').split('?')[0];
-  return (['class', 'duty', 'board', 'tools', 'screen'] as const).find((r) => r === id) ?? 'class';
+  return (['class', 'duty', 'board', 'tools', 'screen', 'manage', 'roster', 'layout', 'catalog', 'records'] as const).find((r) => r === id) ?? 'class';
 }
 
 function useRoute(): [Route, (r: Route) => void] {
@@ -103,7 +108,7 @@ function Shell() {
           <Logo size={34} />
           <div>
             <strong>电脑室积分</strong>
-            <span>{app.currentTerm?.name ?? '尚无当前学期'}</span>
+            <span>{app.termsKnown ? (app.currentTerm?.name ?? '尚无当前学期') : '…'}</span>
           </div>
         </div>
         <nav className="side-nav" aria-label="主导航">
@@ -113,6 +118,10 @@ function Shell() {
               <span>{item.label}</span>
             </a>
           ))}
+          <a href="#/manage" className={route === 'manage' || route === 'layout' || route === 'catalog' || route === 'records' ? 'is-active' : ''} aria-current={route === 'manage' ? 'page' : undefined}>
+            <Icon name="settings" size={19} />
+            <span>管理</span>
+          </a>
         </nav>
         <a href="#/screen" className="side-screen">
           <Icon name="screen" size={18} />
@@ -125,13 +134,15 @@ function Shell() {
       <div className="main">
         <header className="topbar">
           <ClassSwitcher />
-          {app.currentTerm ? (
-            <span className="term-chip" title="当前学期">
+          {app.termsKnown && app.currentTerm ? (
+            <a href="#/manage" className="term-chip" title="管理学期和班级">
               {app.currentTerm.name}
-            </span>
-          ) : (
-            <span className="term-chip is-warn">未设置当前学期</span>
-          )}
+            </a>
+          ) : app.termsKnown ? (
+            <a href="#/manage" className="term-chip is-warn" title="去建立学期">
+              未设置当前学期
+            </a>
+          ) : null}
           <span className="topbar-spacer" />
           <SyncStatus />
           <a href="#/screen" className="btn btn-ghost btn-sm topbar-screen">
@@ -141,19 +152,7 @@ function Shell() {
         </header>
         <OfflineBanner />
         <main className="page">
-          {!app.classId ? (
-            <div className="page-loading">
-              <Spinner />
-            </div>
-          ) : route === 'class' ? (
-            <ClassroomPage />
-          ) : route === 'duty' ? (
-            <DutyPage />
-          ) : route === 'board' ? (
-            <BoardPage />
-          ) : (
-            <ToolsPage />
-          )}
+          <PageBody route={route} />
         </main>
       </div>
 
@@ -168,12 +167,58 @@ function Shell() {
           <Icon name="screen" size={21} />
           <span>展示</span>
         </a>
+        <a href="#/manage" className={route === 'manage' || route === 'layout' || route === 'catalog' || route === 'records' ? 'is-active' : ''}>
+          <Icon name="settings" size={21} />
+          <span>管理</span>
+        </a>
       </nav>
 
       <Toasts />
       <ConflictDialog />
     </div>
   );
+}
+
+function PageBody(props: { route: Route }) {
+  const app = useApp();
+  if (props.route === 'manage') return <ManagePage />;
+  if (props.route === 'layout') return <LayoutPage />;
+  if (props.route === 'catalog') return <CatalogPage />;
+  if (props.route === 'records') return <RecordsPage />;
+  if (!app.classesKnown) {
+    return (
+      <div className="page-loading">
+        <Spinner />
+      </div>
+    );
+  }
+  if (!app.classId) {
+    return (
+      <EmptyState
+        icon="users"
+        title={app.classesError ? '班级列表没有加载出来' : '还没有可以上课的班级'}
+        hint={app.classesError ? '请检查网络后再试。学期和班级可以在管理页建立。' : '先建立学期和班级，再导入名单。'}
+        action={
+          app.classesError ? (
+            <button type="button" className="btn btn-primary" onClick={() => app.bump('classes')}>
+              <Icon name="refresh" size={16} />
+              重试
+            </button>
+          ) : (
+            <a className="btn btn-primary" href="#/manage">
+              去建立
+              <Icon name="arrowRight" size={16} />
+            </a>
+          )
+        }
+      />
+    );
+  }
+  if (props.route === 'class') return <ClassroomPage />;
+  if (props.route === 'roster') return <RosterPage />;
+  if (props.route === 'duty') return <DutyPage />;
+  if (props.route === 'board') return <BoardPage />;
+  return <ToolsPage />;
 }
 
 function ClassSwitcher() {
@@ -246,6 +291,18 @@ function UserMenu() {
       </button>
       {open ? (
         <div className="menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              window.location.hash = '/manage';
+              window.setTimeout(() => document.getElementById('password')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+            }}
+          >
+            <Icon name="lock" size={16} />
+            修改密码
+          </button>
           <button type="button" role="menuitem" disabled={write.disabled} onClick={() => void logoutOthers()}>
             <Icon name="users" size={16} />
             退出其他设备

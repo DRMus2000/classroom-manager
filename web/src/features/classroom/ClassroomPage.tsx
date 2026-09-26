@@ -82,6 +82,10 @@ export function ClassroomPage() {
     (code: string) => cards.filter((c) => c.column_code === code && c.student).map((c) => c.student!.student_id),
     [cards],
   );
+  const scoreable = useMemo(
+    () => new Set(cards.filter((c) => c.student?.name).map((c) => c.student!.student_id)),
+    [cards],
+  );
 
   const onSeatClick = useCallback(
     (card: SeatCardDto, additive: boolean) => {
@@ -92,6 +96,10 @@ export function ClassroomPage() {
       const id = card.student?.student_id;
       if (!id) {
         if (!additive) clear();
+        return;
+      }
+      if (!card.student?.name) {
+        toast({ tone: 'info', title: `${card.student?.anon_code || '这名学生'} 已匿名，不能再记分` });
         return;
       }
       setSelected((prev) => {
@@ -105,12 +113,12 @@ export function ClassroomPage() {
         return new Set([id]);
       });
     },
-    [mode, swap, clear],
+    [mode, swap, clear, toast],
   );
 
   const onColumnClick = useCallback(
     (code: string, additive: boolean) => {
-      const ids = columnIds(code);
+      const ids = columnIds(code).filter((id) => mode === 'swap' || scoreable.has(id));
       if (mode === 'swap') {
         swap.addSources(ids);
         return;
@@ -121,18 +129,19 @@ export function ClassroomPage() {
         return same ? new Set() : new Set(ids);
       });
     },
-    [mode, swap, columnIds],
+    [mode, swap, columnIds, scoreable],
   );
 
   const onBoxSelect = useCallback(
     (ids: string[], additive: boolean) => {
+      const picked = mode === 'swap' ? ids : ids.filter((id) => scoreable.has(id));
       if (mode === 'swap') {
-        swap.addSources(ids);
+        swap.addSources(picked);
         return;
       }
-      setSelected((prev) => (additive ? new Set([...prev, ...ids]) : new Set(ids)));
+      setSelected((prev) => (additive ? new Set([...prev, ...picked]) : new Set(picked)));
     },
-    [mode, swap],
+    [mode, swap, scoreable],
   );
 
   const termWritable = currentTerm != null && currentTerm.status === 'open' && seats?.term_id === currentTerm.term_id;
@@ -246,6 +255,10 @@ export function ClassroomPage() {
           ]}
           ariaLabel="视图"
         />
+        <a href="#/roster" className="btn btn-ghost btn-sm">
+          <Icon name="users" size={16} />
+          <span>名单</span>
+        </a>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDrawer(true)}>
           <Icon name="history" size={16} />
           <span className="hide-sm">记录</span>

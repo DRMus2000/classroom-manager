@@ -268,6 +268,7 @@ export const seatCardDto = z.object({
       student_id: uuid,
       name: z.string(),
       student_no: z.string(),
+      anon_code: z.string().nullable(),
       balance: z.number().int(),
       marks: z.array(uuid),
       /** 卫生管理员徽章：扫帚图标 + 琥珀色，与普通标记通道分离渲染。 */
