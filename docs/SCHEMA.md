@@ -1,6 +1,6 @@
 # 数据模型与 DDL
 
-本文是设计交付件里的目标库结构，与 `migrations/001_phase1_core.sql`、`migrations/002_phase2_duty_marks.sql` 保持一致。`assert_term_open()` 通过时必须 `RETURN NEW`，这份函数体在 `migrations/003_term_open_return_new.sql`，不改已经发布的 `001`。数据库是 PostgreSQL 16。业务表的主键除审计、登录尝试、卫生操作日志和积分明细序号外，都是 `uuid`，默认 `gen_random_uuid()`。时间列是 `timestamptz`，由数据库 `now()` 写入。
+本文是设计交付件里的目标库结构，与 `migrations/001_phase1_core.sql`、`migrations/002_phase2_duty_marks.sql` 保持一致。给教师的操作说明见 `docs/使用教程.md`。`assert_term_open()` 通过时必须 `RETURN NEW`，这份函数体在 `migrations/003_term_open_return_new.sql`，不改已经发布的 `001`。数据库是 PostgreSQL 16。业务表的主键除审计、登录尝试、卫生操作日志和积分明细序号外，都是 `uuid`，默认 `gen_random_uuid()`。时间列是 `timestamptz`，由数据库 `now()` 写入。
 
 座位编号 `seat_number` 允许为空，只在 `renumerate()` 的事务中间态出现。对外引用使用 `seat_id`。积分历史另存 `seat_number_snapshot`，重排不回溯。
 

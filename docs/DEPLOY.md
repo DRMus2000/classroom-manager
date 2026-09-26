@@ -43,6 +43,8 @@ docker compose exec api node dist/cli/index.js create-teacher --username teacher
 
 镜像构建阶段安装全部依赖并执行 `tsc`，运行阶段只保留生产依赖，并安装 `postgresql16-client`。编译结果在 `dist/src`、`dist/scripts` 和 `dist/cli`。容器入口先以 root 修正可写的备份卷和匿名账本卷，只读备份卷会跳过，再降到 `nodejs` 用户运行。备份容器不提供 HTTP，因此关闭了镜像自带的 `/healthz` 检查。
 
+`create-teacher` 之后打开网站，只能登录。库里还没有学期和班级，页面会停在「未设置当前学期」，课堂区域只有转圈。第一次建学期、激活学期、建班和导入名单按 `docs/使用教程.md` 的准备步骤做。这些操作目前没有页面按钮。
+
 ## 3. HTTPS
 
 Nginx 的 443 提供前端静态资源、`/api/`、`/api/v1/events` 和 `/healthz`。把可信证书放到 `./certs/fullchain.pem` 和 `./certs/privkey.pem`。目录为空时入口脚本会安装 openssl 并生成自签证书；如果构建机访问不到 Alpine 软件源，先在宿主机生成这两个文件再启动。登录响应的 `Set-Cookie` 在 `HTTPS_ENABLED=true` 时包含 `Secure`。

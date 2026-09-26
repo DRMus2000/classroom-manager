@@ -1,6 +1,6 @@
 # API 规格
 
-基线是 `docs/DESIGN.md` v1.1。业务接口前缀 `/api/v1`；健康检查实际路径为根路径 `/healthz`。除登录和健康检查外都要登录。本文件保留目标契约，明确标注尚无路由的接口。
+基线是 `docs/DESIGN.md` v1.1。业务接口前缀 `/api/v1`；健康检查实际路径为根路径 `/healthz`。除登录和健康检查外都要登录。本文件保留目标契约，明确标注尚无路由的接口。页面实际调用了哪些路由，见文末「页面是否调用」。给教师的操作说明见 `docs/使用教程.md`。
 
 业务写操作的 JSON 体一般带 `request_id`（UUID）；登录不带，导入预览用 multipart。座次和卫生轮次写操作带 `expected_version`，切学期带 `expected_current_term_id`；布局提交用 `preview_hash`。时间是带时区的 ISO 8601，服务端生成。支持分页的列表使用 `cursor` 与 `limit`，`limit` 最大 200。
 
@@ -676,3 +676,21 @@ SSE 的 `data` 为：
 ```
 
 `snapshot` 的 `data` 直接是 `{ "current_event_seq": number }`，不包 `payload`。`resync` 的 `payload` 为 `{ "reason": "seq_expired" }`。
+
+## 页面是否调用
+
+2026-09-26 对照 `web/src`。下面这些路由已经注册，页面没有调用。教师能在页面上完成的步骤见 `docs/使用教程.md`。
+
+| 范围 | 已注册、页面未调用 |
+|---|---|
+| 认证 | `POST /auth/password` |
+| 学期与班级 | `POST /terms`、`POST /terms/:id/activate`、`GET /terms/:id/summary`、`POST /classes`、`PATCH /classes/:id` |
+| 学生与导入 | `GET /classes/:id/students`、`POST /classes/:id/students`、`PATCH /students/:id`、`POST /students/:id/leave`、`POST /students/:id/restore`、`POST /students/:id/anonymize`、`POST /classes/:id/anonymize`、`GET /classes/:id/import/template`、`POST /classes/:id/import/preview`、`POST /classes/:id/import/commit` |
+| 布局 | `GET /layout`、`POST /layout/preview-change`、`POST /layout/apply-change` |
+| 标记 | `POST /marks`、`PATCH /marks/:id`、`POST /students/:id/marks/:mark_id`、`DELETE /students/:id/marks/:mark_id`。`GET /marks` 会加载，有标记时座位卡会显示 |
+| 原因模板 | `POST /templates`、`PATCH /templates/:id`、`POST /classes/:id/templates`、`POST /classes/:id/templates/:template_id/override`、`DELETE /classes/:id/templates/:template_id/override`。`GET /classes/:id/templates` 只用于记分栏展示 |
+| 积分查询 | `GET /points/students/:id`、`GET /points/balances/:student_id`。记分不提交批次 `note` |
+| 卫生与点名 | `GET /duty/rounds/:id`、`GET /rollcall/rounds/:id`。当前轮次分别来自 `GET /classes/:id/duty` 和 `GET /classes/:id/rollcall` |
+| 导出、审计、备份 | `GET /classes/:id/export/roster`、`GET /export/points`、`GET /audit`、`GET /backup/records`、`GET /backup/download/:backup_id`。`GET /export/leaderboard` 由榜单页的「导出」链接打开 |
+
+页面会调用的写操作：登录、退出、退出其他设备、换座预览与提交、记分、整批撤销、单条撤销、卫生轮次的开始到结束（含抽选确认与纠正）、点名的开始、抽取、排除和结束、倒计时的 `PUT`。读操作还包括班级、学期、座位、模板、标记、积分时间线、榜单、回放三支、当前点名、倒计时、`GET /events` 和 `/healthz`。

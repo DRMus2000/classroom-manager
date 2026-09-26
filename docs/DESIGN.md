@@ -10,6 +10,7 @@
 | `docs/API.md` | 接口、错误码、请求体与响应体 |
 | `docs/DEPLOY.md` | 部署、备份、恢复、匿名化补做 |
 | `docs/DEVIATIONS.md` | 本文与当前代码、迁移的差异 |
+| `docs/使用教程.md` | 给教师的操作说明。页面还没有入口的准备步骤也写在那里 |
 | `需求文档.md` | 需求基线 v1.0 |
 | `migrations/001_phase1_core.sql` | 第一阶段表 |
 | `migrations/002_phase2_duty_marks.sql` | 第二阶段卫生轮次、普通标记、点名与倒计时表 |
