@@ -19,7 +19,7 @@ const REASONS: { value: LeftReason; label: string }[] = [
 const CHANGE_LABEL = { create: '新增', update: '更新', keep: '保留' } as const;
 
 export function RosterPage() {
-  const { currentClass } = useApp();
+  const { classId, currentClass } = useApp();
   const [tab, setTab] = useState<Tab>('active');
   return (
     <div className="roster">
@@ -29,6 +29,12 @@ export function RosterPage() {
           <p className="muted small">导入会整份成功或整份不写入。文件里没有的学生会留下来。</p>
         </div>
         <span className="toolbar-spacer" />
+        {classId ? (
+          <a className="btn btn-ghost btn-sm" href={`${API_BASE}/classes/${classId}/export/roster`}>
+            <Icon name="download" size={16} />
+            导出花名册
+          </a>
+        ) : null}
         <OfflineHint />
         <Segmented
           value={tab}
