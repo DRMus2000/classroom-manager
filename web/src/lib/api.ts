@@ -210,8 +210,12 @@ export async function apiRequest<TResponse, TBody = unknown>(
   const requestId = isWrite ? (options.requestId ?? newRequestId()) : undefined;
 
   const headers: Record<string, string> = { Accept: 'application/json' };
-  let payload: string | undefined;
-  if (options.body !== undefined) {
+  let payload: BodyInit | undefined;
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (isForm) {
+    // 浏览器自己带 multipart boundary。导入预览只认字段 file，不注入 request_id。
+    payload = options.body as FormData;
+  } else if (options.body !== undefined) {
     headers['Content-Type'] = 'application/json';
     // 后端所有写入 DTO 都要求 request_id 字段，这里统一注入，
     // 避免每个调用点自己记得加（漏加会被 z 校验挡在 400）。

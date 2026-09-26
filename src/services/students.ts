@@ -13,7 +13,7 @@ import * as studentRepo from '../repo/student.js';
 import * as classRepo from '../repo/class.js';
 import * as auditRepo from '../repo/audit.js';
 import { idempotentTx, runReservedIdempotent } from './idempotency.js';
-import { Errors } from '../lib/errors.js';
+import { AppError, Errors } from '../lib/errors.js';
 import type {
   StudentDto,
   CreateStudentInput,
@@ -100,6 +100,12 @@ export async function getStudent(
  * 新增学生。
  * 在班学生必须绑定一个独立座位，不设待排座区（第 20 行）。
  */
+function duplicateStudentNo(): AppError {
+  return new AppError('VALIDATION_FAILED', '班内已有这个学号', {
+    issues: [{ path: ['student_no'], message: '班内已有这个学号' }],
+  });
+}
+
 export async function createStudent(
   actorId: string,
   classId: string,
@@ -133,9 +139,7 @@ export async function createStudent(
     // 班内学号唯一（由 uq_student_no_active 物理保证，这里给出可读错误）
     const dupe = await studentRepo.findStudentByNo(tx, classId, input.student_no);
     if (dupe && dupe.status === 'active') {
-      throw Errors.seatConflict(0, dupe.name).constructor === Error
-        ? Errors.seatConflict(0, dupe.name)
-        : Errors.seatConflict(0, dupe.name);
+      throw duplicateStudentNo();
     }
     if (dupe && dupe.status === 'anonymized') {
       throw Errors.forbidden('该学号属于已匿名化学生，身份不可逆，不允许重新认领');
@@ -190,7 +194,7 @@ export async function patchStudent(
     if (input.student_no && input.student_no !== before.student_no) {
       const dupe = await studentRepo.findStudentByNo(tx, before.class_id, input.student_no);
       if (dupe && dupe.student_id !== studentId && dupe.status === 'active') {
-        throw Errors.seatConflict(0, dupe.name);
+        throw duplicateStudentNo();
       }
       if (dupe && dupe.status === 'anonymized') {
         throw Errors.forbidden('目标学号属于已匿名化学生，不允许占用');

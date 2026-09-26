@@ -246,6 +246,10 @@ export function ClassroomPage() {
           ]}
           ariaLabel="视图"
         />
+        <a href="#/roster" className="btn btn-ghost btn-sm">
+          <Icon name="users" size={16} />
+          <span>名单</span>
+        </a>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDrawer(true)}>
           <Icon name="history" size={16} />
           <span className="hide-sm">记录</span>

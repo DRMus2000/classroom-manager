@@ -14,8 +14,9 @@ import { BoardPage } from './features/board/BoardPage';
 import { ToolsPage } from './features/tools/ToolsPage';
 import { ScreenPage } from './features/screen/ScreenPage';
 import { ManagePage } from './features/manage/ManagePage';
+import { RosterPage } from './features/roster/RosterPage';
 
-type Route = 'class' | 'duty' | 'board' | 'tools' | 'screen' | 'manage';
+type Route = 'class' | 'duty' | 'board' | 'tools' | 'screen' | 'manage' | 'roster';
 
 const NAV: { id: Exclude<Route, 'screen' | 'manage'>; label: string; icon: IconName }[] = [
   { id: 'class', label: '课堂', icon: 'seat' },
@@ -26,7 +27,7 @@ const NAV: { id: Exclude<Route, 'screen' | 'manage'>; label: string; icon: IconN
 
 function readRoute(): Route {
   const id = window.location.hash.replace(/^#\/?/, '').split('?')[0];
-  return (['class', 'duty', 'board', 'tools', 'screen', 'manage'] as const).find((r) => r === id) ?? 'class';
+  return (['class', 'duty', 'board', 'tools', 'screen', 'manage', 'roster'] as const).find((r) => r === id) ?? 'class';
 }
 
 function useRoute(): [Route, (r: Route) => void] {
@@ -208,6 +209,7 @@ function PageBody(props: { route: Route }) {
     );
   }
   if (props.route === 'class') return <ClassroomPage />;
+  if (props.route === 'roster') return <RosterPage />;
   if (props.route === 'duty') return <DutyPage />;
   if (props.route === 'board') return <BoardPage />;
   return <ToolsPage />;

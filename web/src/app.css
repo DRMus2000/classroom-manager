@@ -928,6 +928,94 @@ button.manage-row-main {
   color: var(--muted);
 }
 
+.roster-title {
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.roster-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) 132px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.roster-add .field {
+  margin-bottom: 0;
+}
+
+.roster-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.roster-search input {
+  border: 0;
+  height: 40px;
+  padding: 0;
+  flex: 1;
+  background: transparent;
+  box-shadow: none;
+}
+
+.roster-search input:focus {
+  box-shadow: none;
+}
+
+.roster-templates,
+.roster-file,
+.roster-commit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.roster-file,
+.roster-commit,
+.roster-preview {
+  margin-top: 14px;
+}
+
+.roster-issues {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.roster-issues li {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+  font-size: 13px;
+}
+
+.roster-issues li.is-error {
+  background: var(--neg-soft);
+  color: var(--neg);
+}
+
+.roster-issues strong {
+  margin-right: 8px;
+}
+
+.roster-rename {
+  font-style: normal;
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -3863,7 +3951,8 @@ button.manage-row-main {
 @media (max-width: 980px) {
   .duty-grid,
   .tools,
-  .manage {
+  .manage,
+  .roster-add {
     grid-template-columns: 1fr;
   }
 }
