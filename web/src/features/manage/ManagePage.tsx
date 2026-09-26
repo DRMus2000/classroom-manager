@@ -22,6 +22,18 @@ export function ManagePage() {
       ) : null}
       <TermSection />
       <ClassSection />
+      <section className="card manage-layout">
+        <header className="card-head">
+          <div>
+            <h2>机房布局</h2>
+            <p className="muted small">所有班级共用这一间电脑室。加减座位或调转列的方向之后，座位号会重排，已经记过的号不变。</p>
+          </div>
+          <a className="btn btn-primary" href="#/layout">
+            调整布局
+            <Icon name="arrowRight" size={16} />
+          </a>
+        </header>
+      </section>
     </div>
   );
 }

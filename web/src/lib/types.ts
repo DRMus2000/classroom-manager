@@ -216,6 +216,19 @@ export interface ImportCommitResultDto {
   applied: { create: number; update: number };
 }
 
+export interface LayoutImpactDto {
+  kind: 'insert_slot' | 'move_slot' | 'delete_slot' | 'change_column' | 'renumber';
+  affected_classes: {
+    class_id: string;
+    name: string;
+    students_moved: number;
+    seat_assignments_removed: number;
+  }[];
+  renumber_diff: { seat_id: string; old: number | null; new: number }[];
+  blockers: { code: string; message: string }[];
+  preview_hash: string;
+}
+
 export interface TermSummaryDto {
   term: TermDto;
   total_batches: number;

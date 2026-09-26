@@ -185,20 +185,58 @@ export async function deleteSlot(db: Tx, seatId: string): Promise<void> {
   );
 }
 
-/** 更新列的 direction / facing / label。 */
+/**
+ * 更新列的 direction / facing / label。
+ * 只写入本次提供的字段，避免把未提供的值做成无类型 NULL。
+ */
 export async function updateColumn(
   db: Tx,
   columnId: string,
   patch: { direction?: SeatDirection; facing?: SeatFacing; label?: string },
 ): Promise<RoomColumnRow | null> {
-  const rows = await db.execute<RoomColumnRow>(
-    sql`UPDATE room_column
-        SET direction = COALESCE(${patch.direction ?? null}, direction),
-            facing = COALESCE(${patch.facing ?? null}, facing),
-            label = COALESCE(${patch.label ?? null}, label)
-        WHERE column_id = ${columnId}
-        RETURNING column_id, code, display_order, direction, facing, label`,
-  );
+  const returning = sql`RETURNING column_id, code, display_order, direction, facing, label`;
+  const direction = patch.direction;
+  const facing = patch.facing;
+  const label = patch.label;
+  let rows: RoomColumnRow[];
+  if (direction !== undefined && facing !== undefined && label !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET direction = ${direction}, facing = ${facing}, label = ${label}
+          WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else if (direction !== undefined && facing !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET direction = ${direction}, facing = ${facing}
+          WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else if (direction !== undefined && label !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET direction = ${direction}, label = ${label}
+          WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else if (facing !== undefined && label !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET facing = ${facing}, label = ${label}
+          WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else if (direction !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET direction = ${direction} WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else if (facing !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET facing = ${facing} WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else if (label !== undefined) {
+    rows = await db.execute<RoomColumnRow>(
+      sql`UPDATE room_column SET label = ${label} WHERE column_id = ${columnId} ${returning}`,
+    );
+  } else {
+    rows = await db.execute<RoomColumnRow>(
+      sql`SELECT column_id, code, display_order, direction, facing, label
+          FROM room_column WHERE column_id = ${columnId}`,
+    );
+  }
   return rows[0] ?? null;
 }
 

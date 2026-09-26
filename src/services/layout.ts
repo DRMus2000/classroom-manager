@@ -13,7 +13,8 @@ import { idempotentTx } from './idempotency.js';
 import * as layoutRepo from '../repo/layout.js';
 import * as auditRepo from '../repo/audit.js';
 import { writeEvent } from './publishEvent.js';
-import { renumerate, changedDiff, type RoomColumn, type RoomSlot } from '../domain/renumber.js';
+import { previewRenumber } from '../domain/layoutPreview.js';
+import { renumerate, changedDiff } from '../domain/renumber.js';
 import { Errors } from '../lib/errors.js';
 import type {
   LayoutDto,
@@ -115,8 +116,23 @@ export async function previewLayoutChange(
     }
   }
 
-  // 计算重排差异（模拟变更后的编号）
-  const simulatedDiff = simulateRenumber(columns, slots, kind, payload);
+  // 计算重排差异（模拟变更后的编号，不落库）
+  const simulatedDiff = previewRenumber(
+    columns.map((column) => ({
+      column_id: column.column_id,
+      code: column.code,
+      display_order: column.display_order,
+      direction: column.direction,
+    })),
+    slots.map((slot) => ({
+      seat_id: slot.seat_id,
+      column_id: slot.column_id,
+      sort_in_column: slot.sort_in_column,
+      seat_number: slot.seat_number,
+    })),
+    kind,
+    payload,
+  );
 
   const previewHash = createHash('sha256')
     .update(
@@ -141,54 +157,6 @@ export async function previewLayoutChange(
     blockers,
     preview_hash: previewHash,
   };
-}
-
-/** 模拟变更后的编号（不落库），用于预览差异。 */
-function simulateRenumber(
-  columns: { column_id: string; code: string; display_order: number; direction: any }[],
-  slots: { seat_id: string; column_id: string; sort_in_column: number; seat_number: number | null }[],
-  kind: LayoutChangeKind,
-  payload: Record<string, unknown>,
-): { seat_id: string; old_number: number | null; new_number: number }[] {
-  let simulatedSlots: RoomSlot[] = slots.map((s) => ({ ...s }));
-
-  if (kind === 'insert_slot') {
-    const columnId = payload['column_id'] as string;
-    const afterSort = Number(payload['after_sort'] ?? 0);
-    // 模拟插入一个新槽位（用临时 id）
-    simulatedSlots = simulatedSlots.map((s) =>
-      s.column_id === columnId && s.sort_in_column > afterSort
-        ? { ...s, sort_in_column: s.sort_in_column + 1 }
-        : s,
-    );
-    simulatedSlots.push({
-      seat_id: '__new__',
-      column_id: columnId,
-      sort_in_column: afterSort + 1,
-      seat_number: null,
-    });
-  } else if (kind === 'delete_slot') {
-    const seatId = payload['seat_id'] as string;
-    const target = simulatedSlots.find((s) => s.seat_id === seatId);
-    if (target) {
-      simulatedSlots = simulatedSlots
-        .filter((s) => s.seat_id !== seatId)
-        .map((s) =>
-          s.column_id === target.column_id && s.sort_in_column > target.sort_in_column
-            ? { ...s, sort_in_column: s.sort_in_column - 1 }
-            : s,
-        );
-    }
-  }
-
-  const cols: RoomColumn[] = columns.map((c) => ({
-    column_id: c.column_id,
-    code: c.code,
-    display_order: c.display_order,
-    direction: c.direction,
-  }));
-
-  return renumerate(cols, simulatedSlots).filter((d) => d.seat_id !== '__new__');
 }
 
 /* ------------------------------------------------------------------ */
