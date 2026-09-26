@@ -1045,6 +1045,78 @@ button.manage-row-main {
   margin-bottom: 0;
 }
 
+.catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.catalog-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) 120px 96px 140px auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.catalog-mark-add {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.catalog-add .field {
+  margin-bottom: 0;
+}
+
+.catalog-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.catalog-choice,
+.catalog-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.catalog-choice.is-on,
+.catalog-swatch.is-on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.catalog-plus,
+.catalog-minus {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.catalog-plus {
+  color: var(--pos, #0d9488);
+}
+
+.catalog-minus {
+  color: var(--neg);
+}
+
+.catalog-mark {
+  margin-right: 8px;
+}
+
+.catalog-assign {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.catalog-assign h2 {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
 .layout-page {
   display: flex;
   flex-direction: column;
@@ -4108,6 +4180,15 @@ button.manage-row-main {
   }
 
   .manage-password-form .btn {
+    width: 100%;
+  }
+
+  .catalog-add,
+  .catalog-mark-add {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-add .btn {
     width: 100%;
   }
 }

@@ -16,8 +16,9 @@ import { ScreenPage } from './features/screen/ScreenPage';
 import { ManagePage } from './features/manage/ManagePage';
 import { RosterPage } from './features/roster/RosterPage';
 import { LayoutPage } from './features/layout/LayoutPage';
+import { CatalogPage } from './features/catalog/CatalogPage';
 
-type Route = 'class' | 'duty' | 'board' | 'tools' | 'screen' | 'manage' | 'roster' | 'layout';
+type Route = 'class' | 'duty' | 'board' | 'tools' | 'screen' | 'manage' | 'roster' | 'layout' | 'catalog';
 
 const NAV: { id: Exclude<Route, 'screen' | 'manage'>; label: string; icon: IconName }[] = [
   { id: 'class', label: '课堂', icon: 'seat' },
@@ -28,7 +29,7 @@ const NAV: { id: Exclude<Route, 'screen' | 'manage'>; label: string; icon: IconN
 
 function readRoute(): Route {
   const id = window.location.hash.replace(/^#\/?/, '').split('?')[0];
-  return (['class', 'duty', 'board', 'tools', 'screen', 'manage', 'roster', 'layout'] as const).find((r) => r === id) ?? 'class';
+  return (['class', 'duty', 'board', 'tools', 'screen', 'manage', 'roster', 'layout', 'catalog'] as const).find((r) => r === id) ?? 'class';
 }
 
 function useRoute(): [Route, (r: Route) => void] {
@@ -116,7 +117,7 @@ function Shell() {
               <span>{item.label}</span>
             </a>
           ))}
-          <a href="#/manage" className={route === 'manage' || route === 'layout' ? 'is-active' : ''} aria-current={route === 'manage' ? 'page' : undefined}>
+          <a href="#/manage" className={route === 'manage' || route === 'layout' || route === 'catalog' ? 'is-active' : ''} aria-current={route === 'manage' ? 'page' : undefined}>
             <Icon name="settings" size={19} />
             <span>管理</span>
           </a>
@@ -165,7 +166,7 @@ function Shell() {
           <Icon name="screen" size={21} />
           <span>展示</span>
         </a>
-        <a href="#/manage" className={route === 'manage' || route === 'layout' ? 'is-active' : ''}>
+        <a href="#/manage" className={route === 'manage' || route === 'layout' || route === 'catalog' ? 'is-active' : ''}>
           <Icon name="settings" size={21} />
           <span>管理</span>
         </a>
@@ -181,6 +182,7 @@ function PageBody(props: { route: Route }) {
   const app = useApp();
   if (props.route === 'manage') return <ManagePage />;
   if (props.route === 'layout') return <LayoutPage />;
+  if (props.route === 'catalog') return <CatalogPage />;
   if (!app.classesKnown) {
     return (
       <div className="page-loading">

@@ -34,6 +34,18 @@ export function ManagePage() {
           </a>
         </header>
       </section>
+      <section className="card manage-layout">
+        <header className="card-head">
+          <div>
+            <h2>原因和标记</h2>
+            <p className="muted small">记分原因出现在座位图底部。普通标记只标在座位上，不加分。</p>
+          </div>
+          <a className="btn btn-primary" href="#/catalog">
+            维护原因和标记
+            <Icon name="arrowRight" size={16} />
+          </a>
+        </header>
+      </section>
       <PasswordSection />
     </div>
   );
