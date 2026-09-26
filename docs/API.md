@@ -451,6 +451,7 @@
         "student_id": "…",
         "name": "张小明",
         "student_no": "202401",
+        "anon_code": null,
         "balance": 10,
         "marks": [],
         "duty": null
@@ -460,7 +461,7 @@
 }
 ```
 
-空座位的 `student` 为 `null`。`student.duty` 是已经开始计次的在任任期（`status = active` 且 `started_round_id` 已写入）。下一轮新任仍只出现在 `GET /classes/:id/duty` 的 `next_appointees`，座位卡不提前显示。全屏展示使用同一响应，页面不渲染 `remark`。学生详情里的备注只在管理接口 `GET /classes/:id/students` 返回。
+空座位的 `student` 为 `null`。已匿名且仍坐在座位上的学生也会出现在卡片里，`name` 和 `student_no` 为空，`anon_code` 有值。记分只接受在班学生。`student.duty` 是已经开始计次的在任任期（`status = active` 且 `started_round_id` 已写入）。下一轮新任仍只出现在 `GET /classes/:id/duty` 的 `next_appointees`，座位卡不提前显示。全屏展示使用同一响应，页面不渲染 `remark`。学生详情里的备注只在管理接口 `GET /classes/:id/students` 返回。
 
 ### 积分
 
@@ -683,8 +684,7 @@ SSE 的 `data` 为：
 
 | 范围 | 已注册、页面未调用 |
 |---|---|
-| 匿名化 | `POST /students/:id/anonymize`、`POST /classes/:id/anonymize`。名单页会调用学生的新增、修改、离班、恢复，以及导入模板、预览和提交 |
 | 积分查询 | `GET /points/students/:id`、`GET /points/balances/:student_id`。记分不提交批次 `note` |
 | 卫生与点名 | `GET /duty/rounds/:id`、`GET /rollcall/rounds/:id`。当前轮次分别来自 `GET /classes/:id/duty` 和 `GET /classes/:id/rollcall` |
 
-页面会调用的写操作：登录、退出、退出其他设备、修改密码、建立学期、激活学期、建班、改名、归档和恢复、新增学生、修改学生、离班、恢复、导入预览与提交、布局预览与提交、原因模板的新增、修改、班内覆盖和清除、普通标记的新增和停用、给学生打上或摘下标记、换座预览与提交、记分、整批撤销、单条撤销、卫生轮次的开始到结束（含抽选确认与纠正）、点名的开始、抽取、排除和结束、倒计时的 `PUT`。读操作还包括班级（管理页带 `include_archived=true`）、学期、学期汇总、学生列表、导入模板下载、机房布局、座位、模板、标记、积分时间线、榜单、榜单导出、花名册导出、积分明细导出、回放三支、当前点名、倒计时、审计、备份记录、`GET /events` 和 `/healthz`。
+页面会调用的写操作：登录、退出、退出其他设备、修改密码、建立学期、激活学期、建班、改名、归档和恢复、新增学生、修改学生、离班、恢复、学生匿名化、班级匿名化、导入预览与提交、布局预览与提交、原因模板的新增、修改、班内覆盖和清除、普通标记的新增和停用、给学生打上或摘下标记、换座预览与提交、记分、整批撤销、单条撤销、卫生轮次的开始到结束（含抽选确认与纠正）、点名的开始、抽取、排除和结束、倒计时的 `PUT`。读操作还包括班级（管理页带 `include_archived=true`）、学期、学期汇总、学生列表（含 `status=anonymized`）、导入模板下载、机房布局、座位、模板、标记、积分时间线、榜单、榜单导出、花名册导出、积分明细导出、回放三支、当前点名、倒计时、审计、备份记录、`GET /events` 和 `/healthz`。

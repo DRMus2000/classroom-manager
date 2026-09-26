@@ -348,6 +348,9 @@ function ClassSection() {
   const [rename, setRename] = useState<ClassDto | null>(null);
   const [renameTo, setRenameTo] = useState('');
   const [archive, setArchive] = useState<ClassDto | null>(null);
+  const [anonymizing, setAnonymizing] = useState<ClassDto | null>(null);
+  const [anonConfirm, setAnonConfirm] = useState('');
+  const [anonLedgerError, setAnonLedgerError] = useState('');
   const list = useResource(
     () => api<ClassDto[]>('/classes', { query: { include_archived: 'true' } }),
     [tick('classes')],
@@ -402,6 +405,47 @@ function ClassSection() {
     toast({ tone: 'success', title: `已恢复「${updated.name}」` });
   }
 
+  function openAnonymize(row: ClassDto) {
+    setAnonymizing(row);
+    setAnonConfirm('');
+    setAnonLedgerError('');
+  }
+
+  async function confirmAnonymize() {
+    if (!anonymizing || anonConfirm.trim() !== anonymizing.name) return;
+    const target = anonymizing;
+    const updated = await write.run(
+      { op: 'anonymize-class', class_id: target.class_id },
+      (requestId) =>
+        api<{ anonymized: number; failed: number; students: string[] }>(`/classes/${target.class_id}/anonymize`, {
+          method: 'POST',
+          requestId,
+          body: {},
+        }),
+      {
+        onError: (err) => {
+          bump('seats', 'classes', 'duty', 'rollcall', 'points');
+          if (err instanceof ApiError && err.message.includes('匿名化意图仍待重试')) {
+            setAnonLedgerError(err.message);
+            toast({ tone: 'error', title: '姓名已经清空', detail: err.message });
+            return true;
+          }
+          return false;
+        },
+      },
+    );
+    if (!updated) return;
+    setAnonymizing(null);
+    setAnonConfirm('');
+    setAnonLedgerError('');
+    bump('seats', 'classes', 'duty', 'rollcall', 'points');
+    toast({
+      tone: 'success',
+      title: updated.anonymized > 0 ? `「${target.name}」已处理 ${updated.anonymized} 人` : `「${target.name}」没有还要匿名的学生`,
+      detail: updated.anonymized > 0 ? '姓名和学号已清空，不能还原。积分还在。' : undefined,
+    });
+  }
+
   return (
     <section className="card">
       <header className="card-head">
@@ -450,6 +494,9 @@ function ClassSection() {
                 </span>
               </div>
               <div className="manage-actions">
+                <button type="button" className="btn btn-ghost btn-sm" disabled={write.disabled} onClick={() => openAnonymize(row)}>
+                  匿名化全班
+                </button>
                 <button type="button" className="btn btn-ghost btn-sm" disabled={write.disabled} onClick={() => setArchive(row)}>
                   归档
                 </button>
@@ -481,6 +528,9 @@ function ClassSection() {
                   <span>{row.active_student_count} 人 · 不在日常列表</span>
                 </div>
                 <div className="manage-actions">
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={write.disabled} onClick={() => openAnonymize(row)}>
+                    匿名化全班
+                  </button>
                   <button type="button" className="btn btn-soft btn-sm" disabled={write.disabled} onClick={() => void restore(row)}>
                     恢复
                   </button>
@@ -546,6 +596,50 @@ function ClassSection() {
           {archive && archive.active_student_count > 0 ? `，${archive.active_student_count} 名在班学生暂时不会出现在座位图上` : ''}
           。学生、积分和座次都还在。需要时可以在本页恢复。
         </p>
+      </Modal>
+      <Modal
+        open={anonymizing != null}
+        title="匿名化整个班"
+        tone="danger"
+        subtitle={anonymizing?.name}
+        onClose={() => setAnonymizing(null)}
+        width={460}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setAnonymizing(null)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={write.disabled || anonConfirm.trim() !== anonymizing?.name}
+              onClick={() => void confirmAnonymize()}
+            >
+              {anonLedgerError ? '重试写入账本' : '匿名化整个班'}
+            </button>
+          </>
+        }
+      >
+        <p>
+          「{anonymizing?.name}」里还没匿名的学生会一起清空姓名、学号和备注，包括已经离班的，不能还原。座位和积分还在。
+          {anonymizing && anonymizing.active_student_count > 0
+            ? ` 当前在班 ${anonymizing.active_student_count} 人。`
+            : ''}
+        </p>
+        <label className="field">
+          <span>输入班级名称「{anonymizing?.name}」以确认</span>
+          <input
+            value={anonConfirm}
+            aria-label="确认班级名称"
+            autoComplete="off"
+            autoFocus
+            onChange={(e) => setAnonConfirm(e.target.value)}
+          />
+        </label>
+        {anonConfirm.trim() && anonConfirm.trim() !== anonymizing?.name ? (
+          <p className="form-error">和班级名称不一致</p>
+        ) : null}
+        {anonLedgerError ? <p className="form-error">{anonLedgerError}</p> : null}
       </Modal>
     </section>
   );

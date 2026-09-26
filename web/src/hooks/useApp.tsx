@@ -239,7 +239,7 @@ export function AppProvider(props: { me: MeDto; onSignedOut: () => void; childre
       .filter((c) => c.student)
       .map((c) => ({
         student_id: c.student!.student_id,
-        name: c.student!.name,
+        name: c.student!.name || c.student!.anon_code || '匿名',
         student_no: c.student!.student_no,
         seat_id: c.seat_id,
         seat_number: c.seat_number,

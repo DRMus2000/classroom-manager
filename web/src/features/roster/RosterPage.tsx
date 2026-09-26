@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { API_BASE, api } from '../../lib/api';
+import { API_BASE, ApiError, api } from '../../lib/api';
 import type { ImportPreviewDto, LeftReason, StudentDto } from '../../lib/types';
 import { useApp } from '../../hooks/useApp';
 import { useResource } from '../../hooks/useResource';
@@ -7,7 +7,7 @@ import { useWrite } from '../../hooks/useWrite';
 import { Icon } from '../../components/Icon';
 import { EmptyState, Modal, OfflineHint, Segmented, Spinner } from '../../components/ui';
 
-type Tab = 'active' | 'left' | 'import';
+type Tab = 'active' | 'left' | 'anonymized' | 'import';
 
 const REASONS: { value: LeftReason; label: string }[] = [
   { value: 'transfer', label: '转学' },
@@ -43,6 +43,7 @@ export function RosterPage() {
           options={[
             { value: 'active', label: '在班', icon: 'users' },
             { value: 'left', label: '已离班', icon: 'userX' },
+            { value: 'anonymized', label: '已匿名', icon: 'lock' },
             { value: 'import', label: '导入', icon: 'download' },
           ]}
         />
@@ -52,7 +53,7 @@ export function RosterPage() {
   );
 }
 
-function StudentPanel(props: { status: 'active' | 'left' }) {
+function StudentPanel(props: { status: 'active' | 'left' | 'anonymized' }) {
   const { classId, seats, tick, bump, toast } = useApp();
   const write = useWrite();
   const [q, setQ] = useState('');
@@ -70,6 +71,9 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
   const [confirmName, setConfirmName] = useState('');
   const [restoring, setRestoring] = useState<StudentDto | null>(null);
   const [restoreSeat, setRestoreSeat] = useState('');
+  const [anonymizing, setAnonymizing] = useState<StudentDto | null>(null);
+  const [anonConfirm, setAnonConfirm] = useState('');
+  const [anonLedgerError, setAnonLedgerError] = useState('');
 
   const list = useResource(
     classId ? () => api<StudentDto[]>(`/classes/${classId}/students`, { query: { status: props.status } }) : null,
@@ -80,7 +84,11 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
     .filter((card) => !card.student && card.seat_number != null)
     .sort((a, b) => (a.seat_number ?? 0) - (b.seat_number ?? 0));
   const query = q.trim();
-  const rows = (list.data ?? []).filter((row) => !query || row.name.includes(query) || row.student_no.includes(query));
+  const rows = (list.data ?? []).filter((row) => {
+    if (!query) return true;
+    if (row.status === 'anonymized') return (row.anon_code ?? '').includes(query);
+    return row.name.includes(query) || row.student_no.includes(query);
+  });
   const canAdd = studentNo.trim() && name.trim() && seatId && version != null;
 
   async function addStudent() {
@@ -183,6 +191,47 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
     });
   }
 
+  function openAnonymize(row: StudentDto) {
+    setAnonymizing(row);
+    setAnonConfirm('');
+    setAnonLedgerError('');
+  }
+
+  async function confirmAnonymize() {
+    if (!anonymizing || anonConfirm.trim() !== anonymizing.name) return;
+    const target = anonymizing;
+    const updated = await write.run(
+      { op: 'anonymize-student', student_id: target.student_id },
+      (requestId) =>
+        api<{ student: StudentDto; ledger_entry_id: string }>(`/students/${target.student_id}/anonymize`, {
+          method: 'POST',
+          requestId,
+          body: {},
+        }),
+      {
+        onError: (err) => {
+          bump('seats', 'classes', 'duty', 'rollcall', 'points');
+          if (err instanceof ApiError && err.message.includes('匿名化意图仍待重试')) {
+            setAnonLedgerError(err.message);
+            toast({ tone: 'error', title: '姓名已经清空', detail: err.message });
+            return true;
+          }
+          return false;
+        },
+      },
+    );
+    if (!updated) return;
+    setAnonymizing(null);
+    setAnonConfirm('');
+    setAnonLedgerError('');
+    bump('seats', 'classes', 'duty', 'rollcall', 'points');
+    toast({
+      tone: 'success',
+      title: `已记为 ${updated.student.anon_code ?? '匿名'}`,
+      detail: '姓名和学号已清空，不能还原。积分还在。',
+    });
+  }
+
   return (
     <section className="card">
       {props.status === 'active' ? (
@@ -222,11 +271,20 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
           </button>
         </form>
       ) : (
-        <p className="manage-note">离班学生不出现在座位图、榜单和点名里。恢复时要重新选一个空座。</p>
+        <p className="manage-note">
+          {props.status === 'left'
+            ? '离班学生不出现在座位图、榜单和点名里。恢复时要重新选一个空座。'
+            : '这些学生的姓名和学号已经清空，不能还原。座位和积分还在，座位图上显示为匿名。'}
+        </p>
       )}
       <div className="roster-search">
         <Icon name="search" size={16} />
-        <input value={q} placeholder="按姓名或学号查找" aria-label="查找学生" onChange={(e) => setQ(e.target.value)} />
+        <input
+          value={q}
+          placeholder={props.status === 'anonymized' ? '按匿名代号查找' : '按姓名或学号查找'}
+          aria-label="查找学生"
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
       {list.loading && !list.data ? (
         <div className="page-loading">
@@ -234,8 +292,16 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
         </div>
       ) : rows.length === 0 ? (
         <EmptyState
-          icon={props.status === 'active' ? 'users' : 'userX'}
-          title={query ? '没有匹配的学生' : props.status === 'active' ? '还没有在班学生' : '没有已离班的学生'}
+          icon={props.status === 'anonymized' ? 'lock' : props.status === 'active' ? 'users' : 'userX'}
+          title={
+            query
+              ? '没有匹配的学生'
+              : props.status === 'active'
+                ? '还没有在班学生'
+                : props.status === 'left'
+                  ? '没有已离班的学生'
+                  : '还没有匿名学生'
+          }
           hint={props.status === 'active' && !query ? '可以在上面添加一名，或到「导入」一次放入整份名单。' : undefined}
         />
       ) : (
@@ -243,15 +309,19 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
           {rows.map((row) => (
             <li key={row.student_id} className="manage-row">
               <div className="manage-row-main">
-                <strong>{row.name}</strong>
+                <strong>{row.status === 'anonymized' ? row.anon_code || '已匿名' : row.name}</strong>
                 <span>
-                  {row.student_no}
+                  {row.status === 'anonymized' ? '姓名和学号已清空' : row.student_no}
                   {row.seat ? ` · ${row.seat.seat_number} 号` : ''}
                   {row.remark ? ` · ${row.remark}` : ''}
                   {props.status === 'left' ? ` · ${reasonLabel(row.left_reason)}` : ''}
                 </span>
               </div>
+              {props.status === 'anonymized' ? null : (
               <div className="manage-actions">
+                <button type="button" className="btn btn-ghost btn-sm" disabled={write.disabled} onClick={() => openAnonymize(row)}>
+                  匿名化
+                </button>
                 {props.status === 'left' ? (
                   <button
                     type="button"
@@ -281,6 +351,7 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
                   </>
                 )}
               </div>
+              )}
             </li>
           ))}
         </ul>
@@ -391,6 +462,46 @@ function StudentPanel(props: { status: 'active' | 'left' }) {
           </select>
         </label>
         {emptySeats.length === 0 ? <p className="manage-note">现在没有空座，先空出一个座位再恢复。</p> : null}
+      </Modal>
+
+      <Modal
+        open={anonymizing != null}
+        title="匿名化这名学生"
+        tone="danger"
+        subtitle={anonymizing ? `${anonymizing.name} · ${anonymizing.student_no}` : undefined}
+        onClose={() => setAnonymizing(null)}
+        width={460}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setAnonymizing(null)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={write.disabled || anonConfirm.trim() !== anonymizing?.name}
+              onClick={() => void confirmAnonymize()}
+            >
+              {anonLedgerError ? '重试写入账本' : '确认匿名化'}
+            </button>
+          </>
+        }
+      >
+        <p>姓名、学号和备注会清空，不能还原。座位、积分和卫生记录还在，座位图改显示匿名代号。</p>
+        <label className="field">
+          <span>输入姓名「{anonymizing?.name}」以确认</span>
+          <input
+            value={anonConfirm}
+            aria-label="确认匿名姓名"
+            autoComplete="off"
+            autoFocus
+            onChange={(e) => setAnonConfirm(e.target.value)}
+          />
+        </label>
+        {anonConfirm.trim() && anonConfirm.trim() !== anonymizing?.name ? (
+          <p className="form-error">和现在的姓名不一致</p>
+        ) : null}
+        {anonLedgerError ? <p className="form-error">{anonLedgerError}</p> : null}
       </Modal>
     </section>
   );

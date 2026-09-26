@@ -38,9 +38,9 @@ export async function getClassSeats(
   const cls = await classRepo.findClass(db, classId);
   if (!cls) throw Errors.notFound('班级', classId);
 
-  const activeStudents = await studentRepo.listActiveStudentsWithSeats(db, classId);
-
-  const studentIds = activeStudents.map((s) => s.student_id);
+  const roster = await studentRepo.listStudents(db, classId, { status: 'all' });
+  const visible = roster.filter((s) => s.status === 'active' || s.status === 'anonymized');
+  const studentIds = visible.map((s) => s.student_id);
   const [seats, marks, rawColumns, balances, dutyTerms] = await Promise.all([
     studentRepo.listClassSeats(db, classId),
     studentRepo.listStudentMarks(db, studentIds),
@@ -62,9 +62,7 @@ export async function getClassSeats(
     ),
   ]);
 
-  const activeSeatByStudent = new Map(
-    activeStudents.filter((s) => s.seat).map((s) => [s.student_id, s]),
-  );
+  const byId = new Map(visible.map((s) => [s.student_id, s]));
   const dutyByStudent = new Map(
     dutyTerms.map((term) => [
       term.student_id,
@@ -78,7 +76,7 @@ export async function getClassSeats(
   );
 
   const cards: SeatCardDto[] = seats.map((seat) => {
-    const student = seat.student_id ? activeSeatByStudent.get(seat.student_id) : undefined;
+    const student = seat.student_id ? byId.get(seat.student_id) : undefined;
     return {
       seat_id: seat.seat_id,
       seat_number: seat.seat_number,
@@ -90,6 +88,7 @@ export async function getClassSeats(
             student_id: student.student_id,
             name: student.name,
             student_no: student.student_no,
+            anon_code: student.anon_code,
             balance: balances.get(student.student_id) ?? 0,
             marks: marks.get(student.student_id) ?? [],
             duty: dutyByStudent.get(student.student_id) ?? null,

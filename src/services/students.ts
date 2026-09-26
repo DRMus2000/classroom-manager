@@ -76,7 +76,7 @@ export async function listStudents(
   const out: StudentDto[] = [];
   for (const r of rows) {
     const seat =
-      r.status === 'active' ? await studentRepo.findStudentSeat(db, classId, r.student_id) : null;
+      r.status === 'left' ? null : await studentRepo.findStudentSeat(db, classId, r.student_id);
     out.push(toDto(r, seat, marks.get(r.student_id) ?? []));
   }
   return out;
