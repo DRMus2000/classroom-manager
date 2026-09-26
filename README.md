@@ -1,6 +1,8 @@
 # 电脑室学生积分管理系统
 
-一位信息技术教师管理多个班级，围绕真实机房座位完成学生积分、课堂展示和卫生管理的 Web 应用。学生无需登录。
+小学信息老师自用的电脑室积分管理系统，使用GPT-6 Astra配合grill-me 制定需求方案，claude fable 5.1进行系统设计（做了一半没额度了让Grok接手了），Grok 4.6 4.7进行代码实现和测试，GPT-6 Astra进行最终审计，最后用cursor cloud agent进行部署验收，第一次用ai来制作工具，经验不足见谅。
+
+以下是AI维护的README内容
 
 教师怎么用，见 **[使用教程](docs/使用教程.md)**。
 
@@ -92,7 +94,7 @@ cd web && npm ci && npm run dev
 ## 项目结构
 
 ```
-classroom-manager/
+it-classroom-points/
 ├── migrations/          # SQL 迁移（001 核心到 005 学期默认关闭）
 ├── src/
 │   ├── domain/         # 纯领域逻辑（renumber、seatMove、points 等）
