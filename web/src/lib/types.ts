@@ -169,3 +169,11 @@ export interface Page<T> {
   items: T[];
   next_cursor: string | null;
 }
+
+export interface TermSummaryDto {
+  term: TermDto;
+  total_batches: number;
+  total_entries: number;
+  total_reversals: number;
+  students_scored: number;
+}

@@ -73,23 +73,40 @@ export async function createClass(db: Db | Tx, name: string): Promise<ClassRow> 
   return rows[0]!;
 }
 
-/** 改名 / 归档。 */
+/**
+ * 改名 / 归档。
+ * 不把未提供的字段写成无类型 NULL：Postgres 无法推断 `WHEN $1 IS NULL` 里的参数类型。
+ */
 export async function updateClass(
   db: Db | Tx,
   classId: string,
   patch: { name?: string; archived?: boolean },
 ): Promise<ClassRow | null> {
-  const rows = await db.execute<ClassRow>(
-    sql`UPDATE class
-        SET name = COALESCE(${patch.name ?? null}, name),
-            archived_at = CASE
-              WHEN ${patch.archived ?? null} IS NULL THEN archived_at
-              WHEN ${patch.archived ?? null} = true THEN ${now()}
-              ELSE NULL
-            END
-        WHERE class_id = ${classId}
-        RETURNING class_id, name, archived_at, seat_version, created_at`,
-  );
+  const returning = sql`RETURNING class_id, name, archived_at, seat_version, created_at`;
+  let rows: ClassRow[];
+  if (patch.name !== undefined && patch.archived === true) {
+    rows = await db.execute<ClassRow>(
+      sql`UPDATE class SET name = ${patch.name}, archived_at = ${now()} WHERE class_id = ${classId} ${returning}`,
+    );
+  } else if (patch.name !== undefined && patch.archived === false) {
+    rows = await db.execute<ClassRow>(
+      sql`UPDATE class SET name = ${patch.name}, archived_at = NULL WHERE class_id = ${classId} ${returning}`,
+    );
+  } else if (patch.name !== undefined) {
+    rows = await db.execute<ClassRow>(
+      sql`UPDATE class SET name = ${patch.name} WHERE class_id = ${classId} ${returning}`,
+    );
+  } else if (patch.archived === true) {
+    rows = await db.execute<ClassRow>(
+      sql`UPDATE class SET archived_at = ${now()} WHERE class_id = ${classId} ${returning}`,
+    );
+  } else if (patch.archived === false) {
+    rows = await db.execute<ClassRow>(
+      sql`UPDATE class SET archived_at = NULL WHERE class_id = ${classId} ${returning}`,
+    );
+  } else {
+    return findClass(db, classId);
+  }
   return rows[0] ?? null;
 }
 

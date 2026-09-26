@@ -49,7 +49,8 @@ export function Modal(props: {
       }
     };
     window.addEventListener('keydown', onKey, true);
-    panel.current?.focus();
+    const field = panel.current?.querySelector<HTMLElement>('input, textarea, select');
+    (field ?? panel.current)?.focus();
     return () => window.removeEventListener('keydown', onKey, true);
   }, [open, onClose]);
   if (!open) return null;
